@@ -1,0 +1,9 @@
+{
+  "rewrites": [
+    { "source": "/api/ai/(.*)", "destination": "/api/ai/$1" },
+    { "source": "/api/wechat/(.*)", "destination": "/api/wechat/$1" },
+    { "source": "/api/auth/check-username", "destination": "/api/auth/check-username" },
+    { "source": "/api/(.*)", "destination": "http://119.91.50.192/api/$1" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}
