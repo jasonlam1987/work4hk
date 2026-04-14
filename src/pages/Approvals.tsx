@@ -253,6 +253,18 @@ const Approvals: React.FC = () => {
     }
   };
 
+  useEffect(() => {
+    let cancelled = false;
+    const t = setTimeout(() => {
+      if (cancelled) return;
+      fetchApprovals();
+    }, 150);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, []);
+
   const writeApprovalsCache = (items: Approval[]) => {
     localStorage.setItem(APPROVALS_CACHE_KEY, JSON.stringify({ items, savedAt: Date.now() }));
   };

@@ -18,6 +18,7 @@ export interface Approval {
 export type ApprovalCreate = Partial<Omit<Approval, 'id' | 'employer_name' | 'employer_code' | 'partner_name' | 'created_at' | 'updated_at'>>;
 
 const MOCK_STORAGE_KEY = 'mock_approvals';
+const ENABLE_MOCK_APPROVALS = import.meta.env.DEV;
 
 const readMockApprovals = (): Approval[] => {
   try {
@@ -36,7 +37,7 @@ const writeMockApprovals = (items: Approval[]) => {
 
 const shouldFallbackToMock = (err: any) => {
   const status = err?.response?.status as number | undefined;
-  return status === 500;
+  return ENABLE_MOCK_APPROVALS && status === 500;
 };
 
 export const getApprovals = async (params?: { q?: string; limit?: number; offset?: number }) => {
@@ -51,6 +52,12 @@ export const getApprovals = async (params?: { q?: string; limit?: number; offset
       timeout: 30000,
     });
     const serverList = Array.isArray(response.data) ? response.data : [];
+    if (!ENABLE_MOCK_APPROVALS) {
+      const q = (cleanedParams.q || '').toLowerCase();
+      if (!q) return serverList;
+      return serverList.filter(a => String(a.approval_number || '').toLowerCase().includes(q));
+    }
+
     const mockList = readMockApprovals();
 
     const serverKeys = new Set(
@@ -115,6 +122,8 @@ export const updateApproval = async (id: number, data: Partial<ApprovalCreate>) 
   } catch (err: any) {
     const status = err?.response?.status as number | undefined;
 
+    if (!ENABLE_MOCK_APPROVALS) throw err;
+
     if (status === 404) {
       const list = readMockApprovals();
       const idx = list.findIndex(a => a.id === id);
@@ -155,6 +164,8 @@ export const deleteApproval = async (id: number) => {
     return response.data;
   } catch (err: any) {
     const status = err?.response?.status as number | undefined;
+
+    if (!ENABLE_MOCK_APPROVALS) throw err;
 
     // 後端回 404 代表資料已不存在：視為刪除成功，並同步清理本機 mock（避免畫面殘留）
     if (status === 404) {
