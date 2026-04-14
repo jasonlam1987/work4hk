@@ -361,37 +361,70 @@ export const extractBrOcrFields = (detections: any[], extractedText: string): Br
   const findAddressByLayout = (nameZh: string, nameEn: string) => {
     const label = findBestLabelDet(dets, [/^地址$/i, /\bAddress\b/i, /地址\s*Address/i, /Address\s*地址/i], yTol, xMargin)
     if (!label) return ''
-    const region = dets.filter(d => {
-      const inRowRight = d.minX >= label.maxX + xMargin && Math.abs(d.cy - label.cy) <= yTol
-      const belowSameColumn =
-        d.cy >= label.cy - yTol &&
-        d.cy <= label.cy + yTol * 16 &&
-        d.minX >= Math.max(0, label.minX - xMargin) &&
-        d.minX <= label.maxX + 1600
-      return (inRowRight || belowSameColumn) && !blacklist.test(d.text)
-    })
-
     const looksLikeAddressPart = (s: string) => {
       const t = clean(s)
       if (!t) return false
       if (looksLikeAddress(t)) return true
       if (/\d/.test(t)) return true
       if (/(號|樓|室|座|層|街|道|路|區|大廈|村|苑|邨|中心|商場|工業|大樓)/.test(t)) return true
-      if (/\b(RM|UNIT|FLOOR|FLAT|ROAD|STREET|BUILDING|TOWER|BLOCK|SHOP|ROOM|SUITE|GF|G\/F|IND)\b/i.test(t)) return true
+      if (/\b(RM|UNIT|FLOOR|FLAT|ROAD|STREET|BUILDING|TOWER|BLOCK|BLK|SHOP|ROOM|SUITE|GF|G\/F|IND|INDUSTRIAL|CITY)\b/i.test(t))
+        return true
       return false
     }
 
-    const lineTexts = groupLines(region, yTol)
-      .map(x => x.text)
-      .map(v => v.replace(/[：:]/g, ' ').replace(/\bAddress\b/gi, '').trim())
-      .filter(v => v && !isLabelOnly(v) && !isStopLabelText(v) && !blacklist.test(v))
-      .filter(v => !/Nature\s*of\s*Business|業務性質/i.test(v))
+    const labelRegexes = [/^地址$/i, /\bAddress\b/i, /地址\s*Address/i, /Address\s*地址/i]
+    const groups = groupLines(dets, yTol)
+    const labelGroupIndex = groups.findIndex(g =>
+      g.items.some(
+        it =>
+          Math.abs(it.cy - label.cy) <= yTol &&
+          Math.abs(it.cx - label.cx) <= Math.max(30, label.w * 0.8) &&
+          labelRegexes.some(r => r.test(normalizeLabelText(it.text)))
+      )
+    )
+    if (labelGroupIndex < 0) return ''
 
     const picked: string[] = []
-    for (const v of lineTexts) {
-      if (!looksLikeAddressPart(v)) continue
+
+    const takeFromGroup = (g: { text: string; items: Det[] }) => {
+      const right = g.items
+        .filter(it => it.minX >= label.maxX + xMargin)
+        .sort((a, b) => a.cx - b.cx)
+        .map(it => it.text)
+        .join(' ')
+      const v = clean(right)
+        .replace(/[：:]/g, ' ')
+        .replace(/\bAddress\b/gi, '')
+        .trim()
+      return v
+    }
+
+    const first = takeFromGroup(groups[labelGroupIndex])
+    if (first) picked.push(first)
+
+    for (let i = labelGroupIndex + 1; i < Math.min(groups.length, labelGroupIndex + 1 + 12); i++) {
+      const raw = groups[i].text
+      const v = clean(raw)
+        .replace(/[：:]/g, ' ')
+        .replace(/\bAddress\b/gi, '')
+        .trim()
+      if (!v) continue
+      if (blacklist.test(v)) continue
+      if (isLabelOnly(v)) continue
+      if (/Nature\s*of\s*Business|業務性質|Status|法律地位|Date\s*of\s*(?:Commencement|Expiry)|生效日期|屆滿日期|[呈星]滿日期|到期日期/i.test(v))
+        break
+      if (isStopLabelText(v)) break
+
+      const hasCJK = /[\u4e00-\u9fff]/.test(v)
+      const looksCont = looksLikeAddressPart(v)
+      if (!looksCont) {
+        if (picked.length === 0) continue
+        if (hasCJK && v.length <= 8 && !/(號|樓|室|座|層|街|道|路|區|大廈|村|苑|邨|香港|九龍|新界)/.test(v)) break
+        break
+      }
+
       picked.push(v)
-      if (picked.length >= 6) break
+      if (picked.length >= 8) break
     }
 
     const mergedRaw = clean(picked.join(' '))

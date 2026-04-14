@@ -347,18 +347,37 @@ const Employers: React.FC = () => {
     setIsModalOpen(true);
   };
 
+  const persistEmployersCache = (items: Employer[]) => {
+    setTimeout(() => {
+      try {
+        localStorage.setItem(EMPLOYERS_CACHE_KEY, JSON.stringify({ items, savedAt: Date.now() }));
+      } catch {
+      }
+    }, 0);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
     try {
       if (isEditing && selectedId) {
-        await updateEmployer(selectedId, formData);
+        const saved = await updateEmployer(selectedId, formData);
+        setEmployers(prev => {
+          const next = prev.map(it => (it.id === saved.id ? saved : it));
+          persistEmployersCache(next);
+          return next;
+        });
       } else {
-        await createEmployer(formData);
+        const saved = await createEmployer(formData);
+        setEmployers(prev => {
+          const next = [saved, ...prev];
+          persistEmployersCache(next);
+          return next;
+        });
       }
+      sessionStorage.removeItem('dashboardStats');
       setIsModalOpen(false);
       setHasLoaded(true);
-      fetchEmployers();
     } catch (err: any) {
       alert(err.response?.data?.detail || '操作失敗');
     } finally {
@@ -385,10 +404,9 @@ const Employers: React.FC = () => {
       await deleteEmployer(targetId);
       sessionStorage.removeItem('dashboardStats');
       setHasLoaded(true);
-      fetchEmployers();
     } catch (err: any) {
       setEmployers(prevEmployers);
-      localStorage.setItem(EMPLOYERS_CACHE_KEY, JSON.stringify({ items: prevEmployers, savedAt: Date.now() }));
+      persistEmployersCache(prevEmployers);
       alert(err.response?.data?.detail || '刪除失敗');
     } finally {
       setSaving(false);
