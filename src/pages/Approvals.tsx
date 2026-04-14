@@ -63,12 +63,27 @@ const Approvals: React.FC = () => {
 
   const filteredEmployers = useMemo(() => {
     const q = employerQuery.trim().toLowerCase();
-    const list = q
+    const raw = q
       ? employers.filter(e => {
-          const hay = `${e.code || ''} ${e.name || ''} ${e.english_name || ''}`.toLowerCase();
+          const hay = `${e.code || ''} ${e.name || ''} ${e.english_name || ''} ${e.business_registration_number || ''}`.toLowerCase();
           return hay.includes(q);
         })
       : employers;
+
+    const seen = new Set<string>();
+    const list: Employer[] = [];
+    for (const e of raw) {
+      const key = `${String(e.business_registration_number || '').trim()}|${String(e.code || '').trim()}|${String(e.name || '').trim()}|${String(e.english_name || '').trim()}`
+        .trim()
+        .toLowerCase();
+      const finalKey = key && key !== '|||'
+        ? key
+        : `id:${String((e as any).id ?? '')}`;
+      if (seen.has(finalKey)) continue;
+      seen.add(finalKey);
+      list.push(e);
+    }
+
     return list.slice(0, 8);
   }, [employers, employerQuery]);
 
@@ -226,6 +241,26 @@ const Approvals: React.FC = () => {
     } catch (err: any) {
       const status = err?.response?.status as number | undefined;
       const data = err?.response?.data;
+
+      if (status === 500) {
+        try {
+          const raw = localStorage.getItem(APPROVALS_CACHE_KEY);
+          const parsed = raw ? JSON.parse(raw) : null;
+          const items = Array.isArray(parsed?.items)
+            ? (parsed.items as Approval[])
+            : Array.isArray(parsed)
+              ? (parsed as Approval[])
+              : [];
+
+          if (items.length > 0) {
+            setApprovals(items);
+            setHasLoaded(true);
+            setError('後端批文服務暫時不可用，已顯示本機快取資料；請稍後再刷新。');
+            return;
+          }
+        } catch {
+        }
+      }
 
       const buildDetail = () => {
         const detail = data?.detail;
