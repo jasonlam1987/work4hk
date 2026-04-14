@@ -1,3 +1,5 @@
+import { extractBrOcrFields } from './brOcrExtract'
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method Not Allowed' })
@@ -62,8 +64,7 @@ export default async function handler(req: any, res: any) {
 
   let parsed: any
   try {
-    const mod = await import('./brOcrExtract')
-    parsed = mod.extractBrOcrFields(detections, extractedText)
+    parsed = extractBrOcrFields(detections, extractedText)
   } catch (e: any) {
     res.status(500).json({ error: 'BR parse failed', detail: String(e?.message || e) })
     return
