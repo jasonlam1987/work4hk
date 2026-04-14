@@ -78,6 +78,20 @@ const Employers: React.FC = () => {
     }
   }, []);
 
+  useEffect(() => {
+    if (hasLoaded || employers.length > 0) return;
+    let cancelled = false;
+    const t = setTimeout(() => {
+      if (cancelled) return;
+      setHasLoaded(true);
+      fetchEmployers();
+    }, 200);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [employers.length, hasLoaded]);
+
   const handleOpenFiles = (employer: Employer) => {
     setSelectedEmployerForFiles(employer);
     setActiveFolder(FOLDERS[0]);
@@ -483,7 +497,11 @@ const Employers: React.FC = () => {
               ) : visibleEmployers.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="px-6 py-12 text-center text-gray-500">
-                    {hasLoaded ? '找不到符合條件的僱主' : '尚未載入僱主資料，請點右側刷新按鈕取得列表'}
+                    {error
+                      ? '後端僱主服務暫時不可用，請稍後再刷新'
+                      : hasLoaded
+                        ? '找不到符合條件的僱主'
+                        : '尚未載入僱主資料，請點右側刷新按鈕取得列表'}
                   </td>
                 </tr>
               ) : (

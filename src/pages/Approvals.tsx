@@ -288,18 +288,6 @@ const Approvals: React.FC = () => {
     }
   };
 
-  useEffect(() => {
-    let cancelled = false;
-    const t = setTimeout(() => {
-      if (cancelled) return;
-      fetchApprovals();
-    }, 150);
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
-  }, []);
-
   const writeApprovalsCache = (items: Approval[]) => {
     localStorage.setItem(APPROVALS_CACHE_KEY, JSON.stringify({ items, savedAt: Date.now() }));
   };
@@ -639,7 +627,11 @@ const Approvals: React.FC = () => {
               ) : visibleApprovals.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-6 py-12 text-center text-gray-500">
-                    {hasLoaded ? '找不到符合條件的批文' : '尚未載入批文資料，請點右側刷新按鈕取得列表'}
+                    {error
+                      ? '後端批文服務暫時不可用，請稍後再刷新'
+                      : hasLoaded
+                        ? '找不到符合條件的批文'
+                        : '尚未載入批文資料，請點右側刷新按鈕取得列表'}
                   </td>
                 </tr>
               ) : (
