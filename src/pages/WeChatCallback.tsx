@@ -28,13 +28,51 @@ const WeChatCallback: React.FC = () => {
 
       setMessage('正在與微信伺服器交換授權資訊…')
 
-      const exchangeResp = await fetch('/api/wechat/exchange', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ code }),
-      })
+      const doExchange = async (headers?: Record<string, string>) => {
+        return fetch('/api/wechat/exchange', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(headers || {}),
+          },
+          body: JSON.stringify({ code }),
+        })
+      }
+
+      let exchangeResp = await doExchange()
+      if (!exchangeResp.ok) {
+        const text = await exchangeResp.text().catch(() => '')
+        let shouldRetry = false
+        try {
+          const parsed = text ? JSON.parse(text) : null
+          const err = typeof parsed?.error === 'string' ? parsed.error : ''
+          shouldRetry = /not configured/i.test(err)
+        } catch {
+          shouldRetry = /not configured/i.test(text)
+        }
+
+        if (shouldRetry) {
+          let appid = ''
+          let secret = ''
+          try {
+            const stored = localStorage.getItem('system_api_keys')
+            const parsed = stored ? JSON.parse(stored) : {}
+            appid = parsed?.wechatAppId ? String(parsed.wechatAppId).trim() : ''
+            secret = parsed?.wechatAppSecret ? String(parsed.wechatAppSecret).trim() : ''
+          } catch {
+          }
+
+          if (appid && secret) {
+            exchangeResp = await doExchange({ 'X-WECHAT-APPID': appid, 'X-WECHAT-APPSECRET': secret })
+          } else {
+            setMessage('尚未配置微信登錄：請到「系統設定 → API 金鑰管理」填寫微信 AppId/AppSecret。')
+            return
+          }
+        } else {
+          setMessage(text || '微信授權交換失敗')
+          return
+        }
+      }
 
       if (!exchangeResp.ok) {
         const text = await exchangeResp.text().catch(() => '')
