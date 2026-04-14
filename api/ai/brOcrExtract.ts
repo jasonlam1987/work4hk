@@ -70,6 +70,19 @@ const sanitizeAddressSuffix = (s: string) => {
       .trim()
     if (t === before) break
   }
+
+  const m = t.match(/^(.*?)(?:\s|,)([\u4e00-\u9fff]{2,8})$/)
+  if (m?.[1] && m?.[2]) {
+    const base = clean(m[1])
+    const tail = clean(m[2])
+    const tailLooksAddress = /(號|樓|室|座|層|街|道|路|區|大廈|村|苑|邨|香港|九龍|新界)/.test(tail)
+    const baseHasArea =
+      /(香港|九龍|新界)/.test(base) ||
+      /\bHONG\s*KONG\b|\bKOWLOON\b|\bNEW\s*TERRITORIES\b|\bHK\b/i.test(base)
+    if (!tailLooksAddress && baseHasArea && looksLikeAddress(base)) {
+      t = base
+    }
+  }
   return t
 }
 
@@ -145,7 +158,7 @@ const isStopLabelText = (s: string) => stopLabel.test(s) || stopLabel.test(norma
 const isBusinessTypeNoise = (s: string) => {
   const t = clean(s)
   if (!t) return true
-  if (/(生效日期|屆滿日期)/.test(t)) return true
+  if (/(生效日期|屆滿日期|呈滿日期)/.test(t)) return true
   if (/Date\s*of\s*(Commencement|Expiry)/i.test(t)) return true
   if (/Certificate\s*No|Cert(?:ificate)?\s*No|登記證號碼|登記號碼|商業登記/i.test(t)) return true
   if (/Fee\s*(and\s*Levy)?|Levy/i.test(t) || /(登記費|徵費)/.test(t)) return true
@@ -281,14 +294,18 @@ export const extractBrOcrFields = (detections: any[], extractedText: string): Br
       if (blacklist.test(t)) return -1
       if (isLabelOnly(t)) return -1
       if (isStopLabelText(t)) return -1
+      if (looksLikeAddress(t)) return -1
 
       let score = 0
       const hasLetters = /[A-Za-z]/.test(t)
       const hasDigits = /\d/.test(t)
+      const hasCJK = /[\u4e00-\u9fff]/.test(t)
       if (hasLetters) score += 50
       if (!hasDigits) score += 20
       if (/^[A-Z][A-Z\s&\-/]{2,40}$/.test(t)) score += 60
       if (t.length >= 3 && t.length <= 40) score += 20
+      if (hasCJK && t.length >= 2 && t.length <= 20) score += 80
+      if (/(加工|製造|餐飲|零售|批發|顧問|服務|工程|物流|運輸|建築|裝修|貿易)/.test(t)) score += 50
       if (/\bTRADING\b/i.test(t)) score += 200
       return score
     }
@@ -344,13 +361,42 @@ export const extractBrOcrFields = (detections: any[], extractedText: string): Br
   }
 
   const findAddressByLayout = (nameZh: string, nameEn: string) => {
-    const label = findBestLabelDet(dets, [/^地址$/i, /\bAddress\b/i, /地址\s*Address/i], yTol, xMargin)
+    const label = findBestLabelDet(dets, [/^地址$/i, /\bAddress\b/i, /地址\s*Address/i, /Address\s*地址/i], yTol, xMargin)
     if (!label) return ''
-    const got = collectRightOf(dets, label, yTol, xMargin, 10)
-      .map(v => v.replace(/\bAddress\b/i, '').trim())
-      .filter(Boolean)
+    const region = dets.filter(d => {
+      const inRowRight = d.minX >= label.maxX + xMargin && Math.abs(d.cy - label.cy) <= yTol
+      const belowSameColumn =
+        d.cy >= label.cy - yTol &&
+        d.cy <= label.cy + yTol * 10 &&
+        d.minX >= Math.max(0, label.minX - xMargin) &&
+        d.minX <= label.maxX + 900
+      return (inRowRight || belowSameColumn) && !blacklist.test(d.text)
+    })
 
-    const mergedRaw = clean(got.join(' '))
+    const looksLikeAddressPart = (s: string) => {
+      const t = clean(s)
+      if (!t) return false
+      if (looksLikeAddress(t)) return true
+      if (/\d/.test(t)) return true
+      if (/(號|樓|室|座|層|街|道|路|區|大廈|村|苑|邨|中心|商場|工業|大樓)/.test(t)) return true
+      if (/\b(RM|UNIT|FLOOR|FLAT|ROAD|STREET|BUILDING|TOWER|BLOCK|SHOP|ROOM|SUITE|GF|G\/F|IND)\b/i.test(t)) return true
+      return false
+    }
+
+    const lineTexts = groupLines(region, yTol)
+      .map(x => x.text)
+      .map(v => v.replace(/[：:]/g, ' ').replace(/\bAddress\b/gi, '').trim())
+      .filter(v => v && !isLabelOnly(v) && !isStopLabelText(v) && !blacklist.test(v))
+      .filter(v => !/Nature\s*of\s*Business|業務性質/i.test(v))
+
+    const picked: string[] = []
+    for (const v of lineTexts) {
+      if (!looksLikeAddressPart(v)) continue
+      picked.push(v)
+      if (picked.length >= 3) break
+    }
+
+    const mergedRaw = clean(picked.join(' '))
     const merged = sanitizeAddressSuffix(mergedRaw)
     if (!merged) return ''
     const nZh = clean(nameZh)
@@ -451,7 +497,7 @@ export const extractBrOcrFields = (detections: any[], extractedText: string): Br
     if (byLayout) return byLayout
     const candidates = collectAfter(lines, [/Nature of Business/i, /業務性質/i], 6)
       .map(v => v.replace(/[：:]/g, ' ').trim())
-      .filter(v => v && !isStopLabelText(v) && !blacklist.test(v) && !isBusinessTypeNoise(v))
+      .filter(v => v && !isStopLabelText(v) && !blacklist.test(v) && !isBusinessTypeNoise(v) && !looksLikeAddress(v))
       .slice(0, 2)
     const merged = clean(candidates.join(' '))
     if (/\bTRADING\b/i.test(merged)) return 'TRADING'
@@ -462,7 +508,11 @@ export const extractBrOcrFields = (detections: any[], extractedText: string): Br
     const byLayout = findAddressByLayout(nameZh, nameEn)
     if (byLayout) return byLayout
 
-    const candidates = collectAfter(lines, [/^(?:地址|Address|公司地址|業務地址)$/i, /\bAddress\b/i, /^地址/], 12)
+    const candidates = collectAfter(
+      lines,
+      [/^(?:地址|Address|公司地址|業務地址)$/i, /\bAddress\b/i, /^地址/, /地址\s*Address|Address\s*地址/i],
+      12
+    )
     const filtered = candidates
       .map(v => v.replace(/\bAddress\b/i, '').trim())
       .filter(v => v && !isLabelOnly(v) && !isStopLabelText(v) && !blacklist.test(v))
@@ -499,4 +549,3 @@ export const extractBrOcrFields = (detections: any[], extractedText: string): Br
     business_type: findBusinessType(),
   }
 }
-
