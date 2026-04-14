@@ -44,7 +44,7 @@ const looksLikeAddress = (s: string) => {
 
   const hasDigit = /\d/.test(t)
   const enTokens =
-    /\b(RM|UNIT|FLOOR|FLAT|ROAD|STREET|BUILDING|TOWER|BLOCK|SHOP|ROOM|SUITE|GF|G\/F)\b/i.test(t)
+    /\b(RM|UNIT|FLOOR|FLAT|ROAD|STREET|BUILDING|TOWER|BLOCK|BLK|SHOP|ROOM|SUITE|GF|G\/F|IND|INDUSTRIAL)\b/i.test(t)
   const zhTokens = /(號|樓|室|座|層|街|道|路|巷|區|大廈|村|苑|邨|徑|里|中心|商場|碼頭|工業|大樓|閣)/.test(t)
   const hkArea = /(香港|九龍|新界)/.test(t) || /\bHONG\s*KONG\b|\bKOWLOON\b|\bNEW\s*TERRITORIES\b/i.test(t)
 
@@ -76,10 +76,7 @@ const sanitizeAddressSuffix = (s: string) => {
     const base = clean(m[1])
     const tail = clean(m[2])
     const tailLooksAddress = /(號|樓|室|座|層|街|道|路|區|大廈|村|苑|邨|香港|九龍|新界)/.test(tail)
-    const baseHasArea =
-      /(香港|九龍|新界)/.test(base) ||
-      /\bHONG\s*KONG\b|\bKOWLOON\b|\bNEW\s*TERRITORIES\b|\bHK\b/i.test(base)
-    if (!tailLooksAddress && baseHasArea && looksLikeAddress(base)) {
+    if (!tailLooksAddress && looksLikeAddress(base)) {
       t = base
     }
   }
@@ -158,7 +155,8 @@ const isStopLabelText = (s: string) => stopLabel.test(s) || stopLabel.test(norma
 const isBusinessTypeNoise = (s: string) => {
   const t = clean(s)
   if (!t) return true
-  if (/(生效日期|屆滿日期|呈滿日期)/.test(t)) return true
+  if (/(生效日期|屆滿日期|[呈星]滿日期|到期日期)/.test(t)) return true
+  if (/日期/.test(t)) return true
   if (/Date\s*of\s*(Commencement|Expiry)/i.test(t)) return true
   if (/Certificate\s*No|Cert(?:ificate)?\s*No|登記證號碼|登記號碼|商業登記/i.test(t)) return true
   if (/Fee\s*(and\s*Levy)?|Levy/i.test(t) || /(登記費|徵費)/.test(t)) return true
@@ -367,9 +365,9 @@ export const extractBrOcrFields = (detections: any[], extractedText: string): Br
       const inRowRight = d.minX >= label.maxX + xMargin && Math.abs(d.cy - label.cy) <= yTol
       const belowSameColumn =
         d.cy >= label.cy - yTol &&
-        d.cy <= label.cy + yTol * 10 &&
+        d.cy <= label.cy + yTol * 16 &&
         d.minX >= Math.max(0, label.minX - xMargin) &&
-        d.minX <= label.maxX + 900
+        d.minX <= label.maxX + 1600
       return (inRowRight || belowSameColumn) && !blacklist.test(d.text)
     })
 
@@ -393,7 +391,7 @@ export const extractBrOcrFields = (detections: any[], extractedText: string): Br
     for (const v of lineTexts) {
       if (!looksLikeAddressPart(v)) continue
       picked.push(v)
-      if (picked.length >= 3) break
+      if (picked.length >= 6) break
     }
 
     const mergedRaw = clean(picked.join(' '))

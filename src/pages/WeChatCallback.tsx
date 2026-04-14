@@ -26,29 +26,12 @@ const WeChatCallback: React.FC = () => {
         return
       }
 
-      let appid = ''
-      let secret = ''
-      try {
-        const stored = localStorage.getItem('system_api_keys')
-        const parsed = stored ? JSON.parse(stored) : {}
-        const envAppId = (import.meta as any)?.env?.VITE_WECHAT_APPID ? String((import.meta as any).env.VITE_WECHAT_APPID).trim() : ''
-        appid = parsed?.wechatAppId ? String(parsed.wechatAppId).trim() : envAppId
-        secret = parsed?.wechatAppSecret ? String(parsed.wechatAppSecret).trim() : ''
-      } catch {
-      }
-      if (!appid) {
-        setMessage('尚未配置微信登錄：請到「系統設定 → API 金鑰管理」填寫微信 AppId，或在環境變數提供 VITE_WECHAT_APPID。')
-        return
-      }
-
       setMessage('正在與微信伺服器交換授權資訊…')
 
       const exchangeResp = await fetch('/api/wechat/exchange', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(appid ? { 'X-WECHAT-APPID': appid } : {}),
-          ...(secret ? { 'X-WECHAT-APPSECRET': secret } : {}),
         },
         body: JSON.stringify({ code }),
       })

@@ -31,7 +31,7 @@ const Login: React.FC = () => {
       const stored = localStorage.getItem('system_api_keys');
       const parsed = stored ? JSON.parse(stored) : {};
       const envAppId = (import.meta as any)?.env?.VITE_WECHAT_APPID ? String((import.meta as any).env.VITE_WECHAT_APPID).trim() : '';
-      const appid = parsed?.wechatAppId ? String(parsed.wechatAppId).trim() : envAppId;
+      const appid = envAppId || (parsed?.wechatAppId ? String(parsed.wechatAppId).trim() : '');
       if (!appid) {
         setError('尚未配置微信登錄：請到「系統設定 → API 金鑰管理」填寫微信 AppId，或在環境變數提供 VITE_WECHAT_APPID。');
         return;
@@ -39,10 +39,12 @@ const Login: React.FC = () => {
       const state = Math.random().toString(36).slice(2) + Date.now().toString(36);
       sessionStorage.setItem('wechat_oauth_state', state);
       const redirectUri = encodeURIComponent(`${window.location.origin}/auth/wechat/callback`);
+      const scope =
+        (import.meta as any)?.env?.VITE_WECHAT_SCOPE ? String((import.meta as any).env.VITE_WECHAT_SCOPE).trim() : 'snsapi_login';
       const url =
         `https://open.weixin.qq.com/connect/qrconnect?appid=${encodeURIComponent(appid)}` +
         `&redirect_uri=${redirectUri}` +
-        `&response_type=code&scope=snsapi_login&state=${encodeURIComponent(state)}` +
+        `&response_type=code&scope=${encodeURIComponent(scope)}&state=${encodeURIComponent(state)}` +
         `#wechat_redirect`;
       window.location.href = url;
     } catch {
