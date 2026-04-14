@@ -30,9 +30,10 @@ const Login: React.FC = () => {
     try {
       const stored = localStorage.getItem('system_api_keys');
       const parsed = stored ? JSON.parse(stored) : {};
-      const appid = parsed?.wechatAppId ? String(parsed.wechatAppId).trim() : '';
+      const envAppId = (import.meta as any)?.env?.VITE_WECHAT_APPID ? String((import.meta as any).env.VITE_WECHAT_APPID).trim() : '';
+      const appid = parsed?.wechatAppId ? String(parsed.wechatAppId).trim() : envAppId;
       if (!appid) {
-        setError('尚未配置微信登錄：請到「系統設定 → API 金鑰管理」填寫微信 AppId/AppSecret。');
+        setError('尚未配置微信登錄：請到「系統設定 → API 金鑰管理」填寫微信 AppId，或在環境變數提供 VITE_WECHAT_APPID。');
         return;
       }
       const state = Math.random().toString(36).slice(2) + Date.now().toString(36);

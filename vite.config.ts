@@ -127,10 +127,12 @@ const brOcrDevPlugin = () => {
             const body = raw ? JSON.parse(raw) : {}
             const code = body?.code
             const appid =
+              (process.env.WECHAT_APPID ? String(process.env.WECHAT_APPID).trim() : '') ||
               (req.headers?.['x-wechat-appid'] as string | undefined) ||
               (req.headers?.['X-WECHAT-APPID'] as string | undefined) ||
               ''
             const secret =
+              (process.env.WECHAT_APPSECRET ? String(process.env.WECHAT_APPSECRET).trim() : '') ||
               (req.headers?.['x-wechat-appsecret'] as string | undefined) ||
               (req.headers?.['X-WECHAT-APPSECRET'] as string | undefined) ||
               ''
@@ -195,6 +197,81 @@ const brOcrDevPlugin = () => {
           }
         })
       })
+
+      server.middlewares.use('/api/wechat/userinfo', async (req: any, res: any) => {
+        if (req.method !== 'POST') {
+          res.statusCode = 405
+          res.setHeader('Content-Type', 'application/json')
+          res.end(JSON.stringify({ error: 'Method Not Allowed' }))
+          return
+        }
+
+        const chunks: Buffer[] = []
+        req.on('data', (c: Buffer) => chunks.push(c))
+        req.on('end', async () => {
+          try {
+            const raw = Buffer.concat(chunks).toString('utf-8')
+            const body = raw ? JSON.parse(raw) : {}
+            const accessToken = typeof body?.access_token === 'string' ? body.access_token.trim() : ''
+            const openid = typeof body?.openid === 'string' ? body.openid.trim() : ''
+            const lang = typeof body?.lang === 'string' ? body.lang.trim() : 'zh_CN'
+
+            if (!accessToken || !openid) {
+              res.statusCode = 400
+              res.setHeader('Content-Type', 'application/json')
+              res.end(JSON.stringify({ error: 'Invalid access_token/openid' }))
+              return
+            }
+
+            const url = new URL('https://api.weixin.qq.com/sns/userinfo')
+            url.searchParams.set('access_token', accessToken)
+            url.searchParams.set('openid', openid)
+            url.searchParams.set('lang', lang)
+
+            const resp = await fetch(url.toString(), { method: 'GET' })
+            const text = await resp.text()
+            let data: any = null
+            try {
+              data = text ? JSON.parse(text) : null
+            } catch {
+              data = null
+            }
+
+            if (!resp.ok) {
+              res.statusCode = 502
+              res.setHeader('Content-Type', 'application/json')
+              res.end(JSON.stringify({ error: 'WeChat userinfo failed', detail: text }))
+              return
+            }
+            if (data?.errcode) {
+              res.statusCode = 400
+              res.setHeader('Content-Type', 'application/json')
+              res.end(JSON.stringify({ error: 'WeChat userinfo failed', detail: data }))
+              return
+            }
+
+            res.statusCode = 200
+            res.setHeader('Content-Type', 'application/json')
+            res.end(
+              JSON.stringify({
+                openid: data?.openid,
+                unionid: data?.unionid,
+                nickname: data?.nickname,
+                sex: data?.sex,
+                province: data?.province,
+                city: data?.city,
+                country: data?.country,
+                headimgurl: data?.headimgurl,
+                privilege: data?.privilege,
+              })
+            )
+          } catch (e: any) {
+            res.statusCode = 500
+            res.setHeader('Content-Type', 'application/json')
+            res.end(JSON.stringify({ error: 'Unexpected error', detail: String(e?.message || e) }))
+          }
+        })
+      })
     },
   }
 }
@@ -204,6 +281,12 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   if (env.AI_GATEWAY_API_KEY && !process.env.AI_GATEWAY_API_KEY) {
     process.env.AI_GATEWAY_API_KEY = env.AI_GATEWAY_API_KEY;
+  }
+  if (env.WECHAT_APPID && !process.env.WECHAT_APPID) {
+    process.env.WECHAT_APPID = env.WECHAT_APPID;
+  }
+  if (env.WECHAT_APPSECRET && !process.env.WECHAT_APPSECRET) {
+    process.env.WECHAT_APPSECRET = env.WECHAT_APPSECRET;
   }
 
   return {

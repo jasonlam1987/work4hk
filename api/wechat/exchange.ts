@@ -8,12 +8,14 @@ export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') return json(res, 405, { error: 'Method Not Allowed' })
 
   const appid =
-    (req.headers?.['x-wechat-appid'] as string | undefined) ||
-    (req.headers?.['X-WECHAT-APPID'] as string | undefined) ||
+    (process.env.WECHAT_APPID ? String(process.env.WECHAT_APPID).trim() : '') ||
+    ((req.headers?.['x-wechat-appid'] as string | undefined) || '') ||
+    ((req.headers?.['X-WECHAT-APPID'] as string | undefined) || '') ||
     ''
   const secret =
-    (req.headers?.['x-wechat-appsecret'] as string | undefined) ||
-    (req.headers?.['X-WECHAT-APPSECRET'] as string | undefined) ||
+    (process.env.WECHAT_APPSECRET ? String(process.env.WECHAT_APPSECRET).trim() : '') ||
+    ((req.headers?.['x-wechat-appsecret'] as string | undefined) || '') ||
+    ((req.headers?.['X-WECHAT-APPSECRET'] as string | undefined) || '') ||
     ''
 
   const code = req.body?.code
@@ -57,4 +59,3 @@ export default async function handler(req: any, res: any) {
     return json(res, 502, { error: 'WeChat exchange failed', detail: String(e?.message || e) })
   }
 }
-
