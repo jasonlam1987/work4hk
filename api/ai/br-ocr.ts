@@ -1,8 +1,14 @@
 import { extractBrOcrFields } from './brOcrExtract'
 
+const json = (res: any, status: number, body: any) => {
+  res.statusCode = status
+  res.setHeader('Content-Type', 'application/json; charset=utf-8')
+  res.end(JSON.stringify(body))
+}
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
-    res.status(405).json({ error: 'Method Not Allowed' })
+    json(res, 405, { error: 'Method Not Allowed' })
     return
   }
 
@@ -17,18 +23,18 @@ export default async function handler(req: any, res: any) {
 
   const imageDataUrl = req.body?.imageDataUrl
   if (!imageDataUrl || typeof imageDataUrl !== 'string' || !imageDataUrl.startsWith('data:image/')) {
-    res.status(400).json({ error: 'Invalid imageDataUrl' })
+    json(res, 400, { error: 'Invalid imageDataUrl' })
     return
   }
 
   if (!tencentSecretId || !tencentSecretKey) {
-    res.status(400).json({ error: 'Tencent OCR credentials are not configured' })
+    json(res, 400, { error: 'Tencent OCR credentials are not configured' })
     return
   }
 
   const base64 = imageDataUrl.includes(',') ? imageDataUrl.split(',')[1] : ''
   if (!base64) {
-    res.status(400).json({ error: 'Invalid imageDataUrl' })
+    json(res, 400, { error: 'Invalid imageDataUrl' })
     return
   }
 
@@ -58,7 +64,7 @@ export default async function handler(req: any, res: any) {
     detections = list
     extractedText = list.map((t: any) => t?.DetectedText).filter(Boolean).join('\n')
   } catch (e: any) {
-    res.status(500).json({ error: 'Tencent OCR failed', detail: String(e?.message || e) })
+    json(res, 500, { error: 'Tencent OCR failed', detail: String(e?.message || e) })
     return
   }
 
@@ -66,11 +72,11 @@ export default async function handler(req: any, res: any) {
   try {
     parsed = extractBrOcrFields(detections, extractedText)
   } catch (e: any) {
-    res.status(500).json({ error: 'BR parse failed', detail: String(e?.message || e) })
+    json(res, 500, { error: 'BR parse failed', detail: String(e?.message || e) })
     return
   }
 
-  res.status(200).json({
+  json(res, 200, {
     name: typeof parsed.name === 'string' ? parsed.name : '',
     english_name: typeof parsed.english_name === 'string' ? parsed.english_name : '',
     business_registration_number:
