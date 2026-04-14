@@ -1,4 +1,4 @@
-import { extractBrOcrFields } from '../../server/brOcrExtract'
+import { extractBrOcrFields } from '../../server/brOcrExtract.js'
 
 const json = (res: any, status: number, body: any) => {
   res.statusCode = status
