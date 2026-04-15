@@ -121,8 +121,9 @@ const Approvals: React.FC = () => {
 
   const formatDateDisplay = (value?: any) => {
     if (!value) return '-';
-    const v = String(value).trim();
+    let v = String(value).trim();
     if (!v) return '-';
+    if (v.includes('T')) v = v.split('T')[0];
     if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v.replace(/-/g, '/');
     return v;
   };
@@ -172,12 +173,18 @@ const Approvals: React.FC = () => {
 
   const toApiDate = (value: string) => {
     const v = value.trim();
-    if (/^\d{4}\/\d{2}\/\d{2}$/.test(v)) return v.replace(/\//g, '-');
-    return v;
+    if (!v) return null as any;
+    const normalized = v.replace(/\//g, '-');
+    if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+      return `${normalized}T00:00:00.000Z`;
+    }
+    return normalized;
   };
 
   const toDateInput = (value: string) => {
-    const v = value.trim();
+    const v = String(value || '').trim();
+    if (!v) return '';
+    if (v.includes('T')) return v.split('T')[0];
     if (/^\d{4}\/\d{2}\/\d{2}$/.test(v)) return v.replace(/\//g, '-');
     return v;
   };
@@ -518,14 +525,12 @@ const Approvals: React.FC = () => {
       employer_id: formData.employer_id,
       partner_id: partnerId,
       approval_number: approvalNo,
+      department: String(formData.department || '').trim() || '勞工處',
+      headcount: (typeof formData.headcount === 'number' && !isNaN(formData.headcount)) ? formData.headcount : 0,
+      signatory_name: String(formData.signatory_name || '').trim() || "",
+      issue_date: formData.issue_date ? toApiDate(String(formData.issue_date)) : null as any,
+      valid_until: formData.valid_until ? toApiDate(String(formData.valid_until)) : null as any,
     };
-
-    const department = String(formData.department || '').trim() || '勞工處';
-    payload.department = department;
-    if (typeof formData.headcount === 'number' && formData.headcount > 0) payload.headcount = formData.headcount;
-    if (formData.signatory_name && String(formData.signatory_name).trim()) payload.signatory_name = String(formData.signatory_name).trim();
-    if (formData.issue_date && String(formData.issue_date).trim()) payload.issue_date = toApiDate(String(formData.issue_date));
-    if (formData.valid_until && String(formData.valid_until).trim()) payload.valid_until = toApiDate(String(formData.valid_until));
 
     setSaving(true);
     try {
