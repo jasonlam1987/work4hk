@@ -17,7 +17,9 @@ interface StoredApprovalFile {
 
 type QuotaDetailForm = {
   quota_seq: string;
-  work_location: string;
+  work_location_1: string;
+  work_location_2: string;
+  work_location_3: string;
   job_title: string;
   monthly_salary: string;
   work_hours: string;
@@ -37,7 +39,9 @@ const initialForm: ApprovalCreate = {
 
 const emptyQuotaRow = (): QuotaDetailForm => ({
   quota_seq: '',
-  work_location: '',
+  work_location_1: '',
+  work_location_2: '',
+  work_location_3: '',
   job_title: '',
   monthly_salary: '',
   work_hours: '',
@@ -384,7 +388,9 @@ const Approvals: React.FC = () => {
       existingQuotas.length > 0
         ? existingQuotas.map(q => ({
             quota_seq: q.quota_seq,
-            work_location: q.work_location,
+            work_location_1: q.work_locations?.[0] || q.work_location || '',
+            work_location_2: q.work_locations?.[1] || '',
+            work_location_3: q.work_locations?.[2] || '',
             job_title: q.job_title,
             monthly_salary: String(q.monthly_salary),
             work_hours: q.work_hours,
@@ -551,7 +557,10 @@ const Approvals: React.FC = () => {
       if (!seq) return { ok: false, message: '配額序號為必填（4位數字）' };
       if (seqSet.has(seq)) return { ok: false, message: `配額序號重複：${seq}` };
       seqSet.add(seq);
-      if (!String(r.work_location || '').trim() || String(r.work_location).trim().length > 200) return { ok: false, message: '工作地點為必填，且不得超過200字' };
+      const loc1 = String(r.work_location_1 || '').trim();
+      const loc2 = String(r.work_location_2 || '').trim();
+      const loc3 = String(r.work_location_3 || '').trim();
+      if (!loc1 || loc1.length > 200 || loc2.length > 200 || loc3.length > 200) return { ok: false, message: '工作地點1為必填，且每個工作地點不得超過200字' };
       if (!String(r.job_title || '').trim() || String(r.job_title).trim().length > 100) return { ok: false, message: '職位名稱為必填，且不得超過100字' };
       const salary = Number(formatSalary(r.monthly_salary));
       if (!Number.isInteger(salary) || salary < 0) return { ok: false, message: '每月工資為必填整數，且需大於或等於0' };
@@ -567,7 +576,12 @@ const Approvals: React.FC = () => {
       .filter(r => !r._deleted)
       .map((r) => ({
         quota_seq: String(r.quota_seq || '').replace(/[^\d]/g, '').padStart(4, '0').slice(-4),
-        work_location: String(r.work_location || '').trim(),
+        work_location: String(r.work_location_1 || '').trim(),
+        work_locations: [
+          String(r.work_location_1 || '').trim(),
+          String(r.work_location_2 || '').trim(),
+          String(r.work_location_3 || '').trim(),
+        ].filter(Boolean).slice(0, 3),
         job_title: String(r.job_title || '').trim(),
         monthly_salary: Number(formatSalary(r.monthly_salary)),
         work_hours: String(r.work_hours || '').trim(),
@@ -1216,14 +1230,34 @@ const Approvals: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">工作地點 *</label>
+                      <label className="block text-xs text-gray-500 mb-1">工作地點1 *</label>
                       <input
                         type="text"
                         maxLength={200}
-                        value={row.work_location}
-                        onChange={(e) => setQuotaDetails(prev => prev.map((r, i) => (i === idx ? { ...r, work_location: e.target.value } : r)))}
+                        value={row.work_location_1}
+                        onChange={(e) => setQuotaDetails(prev => prev.map((r, i) => (i === idx ? { ...r, work_location_1: e.target.value } : r)))}
                         className="w-full px-3 py-2 border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50"
                         required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">工作地點2（選填）</label>
+                      <input
+                        type="text"
+                        maxLength={200}
+                        value={row.work_location_2}
+                        onChange={(e) => setQuotaDetails(prev => prev.map((r, i) => (i === idx ? { ...r, work_location_2: e.target.value } : r)))}
+                        className="w-full px-3 py-2 border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">工作地點3（選填）</label>
+                      <input
+                        type="text"
+                        maxLength={200}
+                        value={row.work_location_3}
+                        onChange={(e) => setQuotaDetails(prev => prev.map((r, i) => (i === idx ? { ...r, work_location_3: e.target.value } : r)))}
+                        className="w-full px-3 py-2 border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50"
                       />
                     </div>
                     <div>

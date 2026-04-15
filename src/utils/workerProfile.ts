@@ -13,12 +13,14 @@ export type WorkerEducation = {
 export type WorkerProfile = {
   approval_id?: number
   approval_number?: string
+  quota_seq?: string
   pinyin_name?: string
   phone_code?: '+86' | '+852' | '+853'
   phone_number?: string
   contact_phone?: string
   residential_address?: string
   mailing_address?: string
+  work_locations?: string[]
   marital_status?: 'married' | 'single' | 'divorced'
   entry_refused?: boolean
   entry_refused_date?: string

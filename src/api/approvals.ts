@@ -20,6 +20,7 @@ export type ApprovalCreate = Partial<Omit<Approval, 'id' | 'employer_name' | 'em
 export type QuotaDetail = {
   quota_seq: string;
   work_location: string;
+  work_locations?: string[];
   job_title: string;
   monthly_salary: number;
   work_hours: string;
@@ -87,12 +88,39 @@ const writeQuotaMap = (map: Record<string, QuotaDetail[]>) => {
 
 export const getApprovalQuotaDetails = (approvalId: number): QuotaDetail[] => {
   const map = readQuotaMap();
-  return Array.isArray(map[String(approvalId)]) ? map[String(approvalId)] : [];
+  const list = Array.isArray(map[String(approvalId)]) ? map[String(approvalId)] : [];
+  return list.map((q: any) => {
+    const locations = Array.isArray(q?.work_locations)
+      ? q.work_locations.map((x: any) => String(x || '').trim()).filter(Boolean).slice(0, 3)
+      : String(q?.work_location || '')
+          .split('|')
+          .map((x: any) => String(x || '').trim())
+          .filter(Boolean)
+          .slice(0, 3);
+    return {
+      ...q,
+      work_location: locations[0] || String(q?.work_location || '').trim(),
+      work_locations: locations,
+    } as QuotaDetail;
+  });
 };
 
 export const setApprovalQuotaDetails = (approvalId: number, details: QuotaDetail[]) => {
   const map = readQuotaMap();
-  map[String(approvalId)] = details;
+  map[String(approvalId)] = details.map((q: any) => {
+    const locations = Array.isArray(q?.work_locations)
+      ? q.work_locations.map((x: any) => String(x || '').trim()).filter(Boolean).slice(0, 3)
+      : String(q?.work_location || '')
+          .split('|')
+          .map((x: any) => String(x || '').trim())
+          .filter(Boolean)
+          .slice(0, 3);
+    return {
+      ...q,
+      work_location: locations[0] || '',
+      work_locations: locations,
+    };
+  });
   writeQuotaMap(map);
 };
 

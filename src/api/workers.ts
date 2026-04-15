@@ -6,6 +6,7 @@ export interface Worker {
   employer_name?: string;
   approval_id?: number;
   approval_number?: string;
+  quota_seq?: string;
   position_id?: number;
   position_name?: string;
   labour_status?: '辦證中' | '在職' | '離職' | string;
@@ -15,6 +16,7 @@ export interface Worker {
   contact_phone?: string;
   residential_address?: string;
   mailing_address?: string;
+  work_locations?: string[] | string;
   marital_status?: 'married' | 'single' | 'divorced' | string;
   entry_refused?: boolean;
   entry_refused_date?: string;

@@ -4,7 +4,7 @@ import clsx from 'clsx';
 import Modal from '../components/Modal';
 import { Worker, WorkerCreate, createWorker, deleteWorker, getWorkers, updateWorker } from '../api/workers';
 import { Employer, getEmployers } from '../api/employers';
-import { Approval, getApprovals } from '../api/approvals';
+import { Approval, getApprovals, getApprovalQuotaDetails, QuotaDetail } from '../api/approvals';
 import { WorkerEducation, WorkerProfile, WorkerWorkExperience, getWorkerProfile, setWorkerProfile } from '../utils/workerProfile';
 import { WorkerFileCategory, WorkerFileMeta, deleteWorkerFile, uploadWorkerFile } from '../api/workerFiles';
 import { PHONE_CODES, labourStatusOptions, labourStatusToApi, labourStatusToUi, normalizeDate, isMainlandId, isPhoneNumber, mergePhone, formatEmploymentMonths, parseEmploymentMonths } from '../utils/workersForm';
@@ -100,6 +100,11 @@ const Workers: React.FC = () => {
 
   const employerId = Number((formData as any).employer_id || 0) || undefined;
   const approvalId = Number((formData as any).approval_id || profile.approval_id || 0) || undefined;
+  const selectedQuotaSeq = String(profile.quota_seq || '').trim();
+  const selectedApprovalQuotaDetails = useMemo<QuotaDetail[]>(() => {
+    if (!approvalId) return [];
+    return getApprovalQuotaDetails(approvalId);
+  }, [approvalId, approvals]);
 
   const fetchWorkers = async () => {
     try {
@@ -251,6 +256,21 @@ const Workers: React.FC = () => {
     return list.slice(0, 8);
   }, [approvals, approvalQuery, employerId]);
 
+  const quotaOptions = useMemo(() => {
+    return selectedApprovalQuotaDetails
+      .map(q => ({
+        seq: String(q.quota_seq || '').replace(/[^\d]/g, '').padStart(4, '0').slice(-4),
+        detail: q,
+      }))
+      .filter(x => x.seq);
+  }, [selectedApprovalQuotaDetails]);
+
+  const selectedQuotaDetail = useMemo(() => {
+    const key = String(selectedQuotaSeq || '').replace(/[^\d]/g, '').padStart(4, '0').slice(-4);
+    if (!key) return undefined;
+    return quotaOptions.find(x => x.seq === key)?.detail;
+  }, [quotaOptions, selectedQuotaSeq]);
+
   const employerLabel = (e: Employer) => `${e.name}`.trim();
   const approvalLabel = (a: Approval) => String(a.approval_number || '').toUpperCase();
 
@@ -266,6 +286,30 @@ const Workers: React.FC = () => {
       ...prev,
       educations: [...(prev.educations || []), emptyEducation()],
     }));
+  };
+
+  const applyQuotaToWorkerForm = (seqRaw: string) => {
+    const seq = String(seqRaw || '').replace(/[^\d]/g, '').padStart(4, '0').slice(-4);
+    const quota = quotaOptions.find(x => x.seq === seq)?.detail;
+    setProfile(prev => ({
+      ...prev,
+      quota_seq: seq,
+      work_locations: quota
+        ? (Array.isArray((quota as any).work_locations) ? (quota as any).work_locations : [String((quota as any).work_location || '')])
+            .map((x: any) => String(x || '').trim())
+            .filter(Boolean)
+            .slice(0, 3)
+        : [],
+    }));
+    if (quota) {
+      const salary = Number((quota as any).monthly_salary);
+      const months = Number((quota as any).employment_months);
+      setFormData(prev => ({
+        ...prev,
+        contract_salary: Number.isFinite(salary) ? String(salary) : prev.contract_salary,
+        employment_term: Number.isFinite(months) && months > 0 ? String(months) : prev.employment_term,
+      }));
+    }
   };
 
   const toBase64DataUrl = (file: File) =>
@@ -381,6 +425,8 @@ const Workers: React.FC = () => {
       marital_status: 'single',
       phone_code: '+852',
       phone_number: '',
+      quota_seq: '',
+      work_locations: [],
       arrival_date: '',
       departure_date: '',
       work_batches: [],
@@ -413,12 +459,18 @@ const Workers: React.FC = () => {
     const merged: WorkerProfile = {
       approval_id: (worker as any).approval_id ?? p.approval_id,
       approval_number: (worker as any).approval_number ?? p.approval_number,
+      quota_seq: (worker as any).quota_seq ?? p.quota_seq,
       pinyin_name: (worker as any).pinyin_name ?? p.pinyin_name,
       contact_phone: (worker as any).contact_phone ?? p.contact_phone,
       phone_code: (p.phone_code as any) || inferredCode,
       phone_number: p.phone_number || inferredNumber,
       residential_address: (worker as any).residential_address ?? p.residential_address,
       mailing_address: (worker as any).mailing_address ?? p.mailing_address,
+      work_locations: Array.isArray((worker as any).work_locations)
+        ? (worker as any).work_locations
+        : Array.isArray(p.work_locations)
+          ? p.work_locations
+          : [],
       marital_status: ((worker as any).marital_status ?? p.marital_status ?? 'single') as any,
       entry_refused: Boolean((worker as any).entry_refused ?? p.entry_refused),
       entry_refused_date: (worker as any).entry_refused_date ?? p.entry_refused_date,
@@ -533,6 +585,10 @@ const Workers: React.FC = () => {
       alert('請選擇批文');
       return;
     }
+    if (approvalId && quotaOptions.length > 0 && !selectedQuotaSeq) {
+      alert('請選擇配額編號');
+      return;
+    }
     const uiStatus = String(formData.labour_status || '辦證中');
     if (!isEditing && uiStatus !== '辦證中') {
       alert('首次錄入資料，勞工狀態只能為「辦證中」');
@@ -565,6 +621,8 @@ const Workers: React.FC = () => {
     try {
       const persistedProfile: WorkerProfile = {
         ...profile,
+        quota_seq: selectedQuotaSeq || undefined,
+        work_locations: Array.isArray(profile.work_locations) ? profile.work_locations.slice(0, 3) : [],
         contact_phone: mergePhone(phoneCode, phoneNumber) || undefined,
         phone_code: phoneCode,
         phone_number: phoneNumber || undefined,
@@ -586,6 +644,7 @@ const Workers: React.FC = () => {
               employer_name: employerName,
               approval_id: approvalId || persistedProfile.approval_id,
               approval_number: String(profile.approval_number || '').trim() || persistedProfile.approval_number,
+              quota_seq: selectedQuotaSeq || persistedProfile.quota_seq,
               status: uiStatus as any,
               start_date: startDate || undefined,
               departure_date: uiStatus === '離職' ? persistedProfile.departure_date : undefined,
@@ -605,10 +664,12 @@ const Workers: React.FC = () => {
         employer_id: employerId,
         approval_id: approvalId,
         approval_number: String(profile.approval_number || '').trim() || undefined,
+        quota_seq: selectedQuotaSeq || undefined,
         pinyin_name: String(profile.pinyin_name || '').trim() || undefined,
         contact_phone: mergePhone(phoneCode, phoneNumber) || undefined,
         residential_address: String(profile.residential_address || '').trim() || undefined,
         mailing_address: String(profile.mailing_address || '').trim() || undefined,
+        work_locations: Array.isArray(persistedProfile.work_locations) ? persistedProfile.work_locations : undefined,
         marital_status: profile.marital_status,
         contract_salary: String(formData.contract_salary || '').trim() || undefined,
         employment_term: formatEmploymentMonths(formData.employment_term) || undefined,
@@ -1009,7 +1070,7 @@ const Workers: React.FC = () => {
                         setEmployerDropdownOpen(true);
                         setApprovalDropdownOpen(false);
                         setFormData(prev => ({ ...prev, employer_id: undefined, approval_id: undefined }));
-                        setProfile(prev => ({ ...prev, approval_id: undefined, approval_number: undefined }));
+                        setProfile(prev => ({ ...prev, approval_id: undefined, approval_number: undefined, quota_seq: '', work_locations: [] }));
                         setApprovalQuery('');
                       }}
                       onFocus={() => {
@@ -1039,7 +1100,7 @@ const Workers: React.FC = () => {
                                 setEmployerQuery(employerLabel(e));
                                 setEmployerDropdownOpen(false);
                                 setApprovalQuery('');
-                                setProfile(prev => ({ ...prev, approval_id: undefined, approval_number: undefined }));
+                                setProfile(prev => ({ ...prev, approval_id: undefined, approval_number: undefined, quota_seq: '', work_locations: [] }));
                               }}
                             >
                               <div className="text-sm font-medium text-gray-900">{employerLabel(e)}</div>
@@ -1066,7 +1127,7 @@ const Workers: React.FC = () => {
                         const v = e.target.value;
                         setApprovalQuery(v);
                         setApprovalDropdownOpen(true);
-                        setProfile(prev => ({ ...prev, approval_id: undefined, approval_number: v }));
+                        setProfile(prev => ({ ...prev, approval_id: undefined, approval_number: v, quota_seq: '', work_locations: [] }));
                         setFormData(prev => ({ ...prev, approval_id: undefined }));
                       }}
                       onFocus={() => {
@@ -1093,7 +1154,7 @@ const Workers: React.FC = () => {
                               className="w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors"
                               onMouseDown={(evt) => evt.preventDefault()}
                               onClick={() => {
-                                setProfile(prev => ({ ...prev, approval_id: (a as any).id, approval_number: a.approval_number }));
+                                setProfile(prev => ({ ...prev, approval_id: (a as any).id, approval_number: a.approval_number, quota_seq: '', work_locations: [] }));
                                 setFormData(prev => ({ ...prev, approval_id: (a as any).id }));
                                 setApprovalQuery(approvalLabel(a));
                                 setApprovalDropdownOpen(false);
@@ -1111,6 +1172,26 @@ const Workers: React.FC = () => {
                       </div>
                     )}
                   </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">配額編號 *</label>
+                  <select
+                    value={selectedQuotaSeq}
+                    onChange={(e) => applyQuotaToWorkerForm(e.target.value)}
+                    disabled={!approvalId || quotaOptions.length === 0}
+                    className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all disabled:opacity-60"
+                    required
+                  >
+                    <option value="">{!approvalId ? '請先選擇批文' : quotaOptions.length === 0 ? '此批文未設定配額' : '請選擇配額編號'}</option>
+                    {quotaOptions.map(opt => (
+                      <option key={opt.seq} value={opt.seq}>{opt.seq}</option>
+                    ))}
+                  </select>
+                  {selectedQuotaDetail && (
+                    <p className="text-xs text-gray-500 mt-1 ml-1">
+                      已套入：{selectedQuotaDetail.job_title || '-'} · 工資 {selectedQuotaDetail.monthly_salary ?? '-'} · {selectedQuotaDetail.employment_months ?? '-'} 個月
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
@@ -1141,6 +1222,26 @@ const Workers: React.FC = () => {
               </div>
               {formData.employment_term && (
                 <p className="text-xs text-gray-500 mt-1 ml-1">將儲存為：{formatEmploymentMonths(formData.employment_term)}</p>
+              )}
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">工作地址（最多3個，自動套入）</label>
+              {(profile.work_locations || []).length === 0 ? (
+                <div className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-apple-sm text-sm text-gray-500">
+                  選擇配額編號後自動帶入
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {(profile.work_locations || []).slice(0, 3).map((addr, idx) => (
+                    <input
+                      key={`${idx}-${addr}`}
+                      type="text"
+                      value={addr}
+                      readOnly
+                      className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-apple-sm text-sm text-gray-700"
+                    />
+                  ))}
+                </div>
               )}
             </div>
           </div>
