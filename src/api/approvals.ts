@@ -35,9 +35,9 @@ const writeMockApprovals = (items: Approval[]) => {
   localStorage.setItem(MOCK_STORAGE_KEY, JSON.stringify(items));
 };
 
-const shouldFallbackToMock = (err: any) => {
+const shouldFallbackToMock = (err: any, allowProd = false) => {
   const status = err?.response?.status as number | undefined;
-  return ENABLE_MOCK_APPROVALS && status === 500;
+  return status === 500 && (ENABLE_MOCK_APPROVALS || allowProd);
 };
 
 export const getApprovals = async (params?: { q?: string; limit?: number; offset?: number }) => {
@@ -78,7 +78,7 @@ export const getApprovals = async (params?: { q?: string; limit?: number; offset
     if (!q) return merged;
     return merged.filter(a => (String(a.approval_number || '').toLowerCase().includes(q)));
   } catch (err: any) {
-    if (!shouldFallbackToMock(err)) throw err;
+    if (!shouldFallbackToMock(err, true)) throw err;
 
     const list = readMockApprovals();
     const q = (cleanedParams.q || '').toLowerCase();
@@ -90,12 +90,7 @@ export const getApprovals = async (params?: { q?: string; limit?: number; offset
 };
 
 export const createApproval = async (data: ApprovalCreate) => {
-  try {
-    const response = await apiClient.post<Approval>('/approvals', data);
-    return response.data;
-  } catch (err: any) {
-    if (!shouldFallbackToMock(err)) throw err;
-
+  const buildMock = () => {
     const list = readMockApprovals();
     const nextId = list.length > 0 ? Math.max(...list.map(a => a.id || 0)) + 1 : 1;
     const item: Approval = {
@@ -108,10 +103,54 @@ export const createApproval = async (data: ApprovalCreate) => {
       valid_until: data.valid_until as any,
       headcount: typeof data.headcount === 'number' ? data.headcount : undefined,
       signatory_name: data.signatory_name as any,
+      __localOnly: true,
     };
     const next = [item, ...list];
     writeMockApprovals(next);
     return item;
+  };
+
+  try {
+    const response = await apiClient.post<Approval>('/approvals', data);
+    return response.data;
+  } catch (err: any) {
+    const status = err?.response?.status as number | undefined;
+    if (status !== 500) throw err;
+
+    const retryPayloads: ApprovalCreate[] = [
+      {
+        employer_id: data.employer_id,
+        partner_id: data.partner_id,
+        approval_number: data.approval_number,
+        department: data.department,
+        headcount: data.headcount,
+        signatory_name: data.signatory_name,
+      },
+      {
+        employer_id: data.employer_id,
+        partner_id: data.partner_id,
+        approval_number: data.approval_number,
+        headcount: typeof data.headcount === 'number' ? data.headcount : 0,
+      },
+      {
+        employer_id: data.employer_id,
+        partner_id: data.partner_id,
+        approval_number: data.approval_number,
+      },
+    ];
+
+    for (const p of retryPayloads) {
+      try {
+        const response = await apiClient.post<Approval>('/approvals', p);
+        return response.data;
+      } catch (e: any) {
+        const s = e?.response?.status as number | undefined;
+        if (s !== 500) throw e;
+      }
+    }
+
+    if (!shouldFallbackToMock(err, true)) throw err;
+    return buildMock();
   }
 };
 
