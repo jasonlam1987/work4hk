@@ -6,6 +6,8 @@ import {
   labourStatusToApi,
   labourStatusToUi,
   mergePhone,
+  parseEmploymentMonths,
+  formatEmploymentMonths,
   normalizeDate,
 } from './workersForm';
 
@@ -35,11 +37,25 @@ describe('workersForm utils', () => {
     expect(labourStatusToUi('Active')).toBe('在職');
     expect(labourStatusToUi('Inactive')).toBe('離職');
     expect(labourStatusToUi('Pending')).toBe('待處理');
+    expect(labourStatusToApi('未知')).toBe('Pending');
+    expect(labourStatusToUi('未知')).toBe('待處理');
   });
 
   it('merges phone', () => {
     expect(PHONE_CODES).toEqual(['+86', '+852', '+853']);
     expect(mergePhone('+852', '98765432')).toBe('+85298765432');
     expect(mergePhone('+86', '')).toBe('');
+  });
+
+  it('parses and formats employment months', () => {
+    expect(parseEmploymentMonths('24個月')).toBe('24');
+    expect(parseEmploymentMonths('2年')).toBe('24');
+    expect(parseEmploymentMonths(12)).toBe('12');
+    expect(formatEmploymentMonths('24')).toBe('24個月');
+    expect(formatEmploymentMonths('2年')).toBe('24個月');
+    expect(parseEmploymentMonths('')).toBe('');
+    expect(parseEmploymentMonths('abc')).toBe('');
+    expect(parseEmploymentMonths('0')).toBe('');
+    expect(formatEmploymentMonths('')).toBe('');
   });
 });

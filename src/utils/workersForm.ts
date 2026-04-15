@@ -30,3 +30,19 @@ export const mergePhone = (code: PhoneCode, number: string) => {
   if (!n) return '';
   return `${code}${n}`;
 };
+
+export const parseEmploymentMonths = (v?: string | number) => {
+  const raw = String(v ?? '').trim();
+  if (!raw) return '';
+  const digits = raw.match(/\d+/)?.[0];
+  if (!digits) return '';
+  const n = Number(digits);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  if (raw.includes('年')) return String(n * 12);
+  return String(n);
+};
+
+export const formatEmploymentMonths = (v?: string | number) => {
+  const m = parseEmploymentMonths(v);
+  return m ? `${m}個月` : '';
+};

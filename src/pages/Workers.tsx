@@ -1,13 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Search, Edit2, Loader2, RefreshCw, Briefcase, GraduationCap, Link2, Phone, Home, Mail, FileUp, Trash2 } from 'lucide-react';
+import { Plus, Search, Edit2, Loader2, RefreshCw, Briefcase, GraduationCap, Link2, Phone, Home, Mail, Trash2, FolderOpen, UploadCloud, Download } from 'lucide-react';
 import clsx from 'clsx';
 import Modal from '../components/Modal';
-import { Worker, WorkerCreate, createWorker, getWorkers, updateWorker } from '../api/workers';
+import { Worker, WorkerCreate, createWorker, deleteWorker, getWorkers, updateWorker } from '../api/workers';
 import { Employer, getEmployers } from '../api/employers';
 import { Approval, getApprovals } from '../api/approvals';
 import { WorkerEducation, WorkerProfile, WorkerWorkExperience, getWorkerProfile, setWorkerProfile } from '../utils/workerProfile';
 import { WorkerFileCategory, WorkerFileMeta, deleteWorkerFile, uploadWorkerFile } from '../api/workerFiles';
-import { PHONE_CODES, labourStatusOptions, labourStatusToApi, labourStatusToUi, normalizeDate, isMainlandId, isPhoneNumber, mergePhone } from '../utils/workersForm';
+import { PHONE_CODES, labourStatusOptions, labourStatusToApi, labourStatusToUi, normalizeDate, isMainlandId, isPhoneNumber, mergePhone, formatEmploymentMonths, parseEmploymentMonths } from '../utils/workersForm';
 
 const WORKERS_CACHE_KEY = 'cache_workers_list_v1';
 const EMPLOYERS_CACHE_KEY = 'cache_employers_list_v1';
@@ -17,6 +17,21 @@ const MAX_FILE_SIZE = 5 * 1024 * 1024;
 const ACCEPT_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png']);
 
 type FileTab = WorkerFileCategory;
+type WorkerFolder = '證件資料' | '學歷證明' | '工作證明';
+
+interface StoredFile {
+  id: string;
+  workerId: number;
+  folder: WorkerFolder;
+  uid: string;
+  name: string;
+  size: number;
+  mimeType: string;
+  uploadTime: string;
+}
+
+const FILE_FOLDERS: WorkerFolder[] = ['證件資料', '學歷證明', '工作證明'];
+const folderToCategory = (f: WorkerFolder): FileTab => (f === '證件資料' ? 'id_docs' : f === '學歷證明' ? 'education_docs' : 'work_docs');
 
 const emptyExperience = (): WorkerWorkExperience => ({ company_name: '', start_date: '', end_date: '' });
 const emptyEducation = (): WorkerEducation => ({ school_name: '', start_date: '', graduation_date: '' });
@@ -57,8 +72,15 @@ const Workers: React.FC = () => {
     phone_number: '',
     files: emptyFiles(),
   });
-  const [activeFileTab, setActiveFileTab] = useState<FileTab>('id_docs');
   const [uploadingCategory, setUploadingCategory] = useState<FileTab | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
+  const [isFileModalOpen, setIsFileModalOpen] = useState(false);
+  const [selectedWorkerForFiles, setSelectedWorkerForFiles] = useState<Worker | null>(null);
+  const [storedFiles, setStoredFiles] = useState<StoredFile[]>([]);
+  const [activeFolder, setActiveFolder] = useState<WorkerFolder>('證件資料');
+  const [dragOver, setDragOver] = useState(false);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Worker | null>(null);
 
   const [employerQuery, setEmployerQuery] = useState('');
   const [approvalQuery, setApprovalQuery] = useState('');
@@ -66,7 +88,7 @@ const Workers: React.FC = () => {
   const [approvalDropdownOpen, setApprovalDropdownOpen] = useState(false);
   const employerBlurTimer = useRef<number | null>(null);
   const approvalBlurTimer = useRef<number | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
 
   const employerId = Number((formData as any).employer_id || 0) || undefined;
   const approvalId = Number((formData as any).approval_id || profile.approval_id || 0) || undefined;
@@ -161,6 +183,23 @@ const Workers: React.FC = () => {
     fetchApprovals();
   }, []);
 
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('mock_worker_files');
+      const parsed = raw ? JSON.parse(raw) : [];
+      setStoredFiles(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      setStoredFiles([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('mock_worker_files', JSON.stringify(storedFiles));
+    } catch {
+    }
+  }, [storedFiles]);
+
   const filteredEmployers = useMemo(() => {
     const q = employerQuery.trim().toLowerCase();
     const raw = q
@@ -229,30 +268,18 @@ const Workers: React.FC = () => {
       reader.readAsDataURL(file);
     });
 
-  const handleChooseCategory = (category: FileTab) => {
-    setActiveFileTab(category);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-      fileInputRef.current.click();
-    }
+  const openWorkerFiles = (worker: Worker) => {
+    setSelectedWorkerForFiles(worker);
+    setActiveFolder('證件資料');
+    setIsFileModalOpen(true);
   };
 
-  const categoryLabel = (c: FileTab) => {
-    if (c === 'id_docs') return '證件資料';
-    if (c === 'education_docs') return '學歷證明';
-    return '工作證明';
-  };
-
-  const handleFileSelected = async (evt: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(evt.target.files || []);
-    if (files.length === 0) return;
-    const category = activeFileTab;
-    const existing = profile.files?.[category] || [];
-    if (existing.length + files.length > MAX_FILES_PER_CATEGORY) {
+  const processUploadFiles = async (files: File[], category: FileTab, workerId: number) => {
+    const existingCount = storedFiles.filter(f => f.workerId === workerId && folderToCategory(f.folder) === category).length;
+    if (existingCount + files.length > MAX_FILES_PER_CATEGORY) {
       alert(`每個分類最多上傳 ${MAX_FILES_PER_CATEGORY} 個檔案`);
       return;
     }
-
     for (const f of files) {
       if (!ACCEPT_TYPES.has(f.type)) {
         alert(`檔案類型不支援：${f.name}（只允許 pdf/jpg/png）`);
@@ -266,51 +293,71 @@ const Workers: React.FC = () => {
 
     setUploadingCategory(category);
     try {
-      const uploaded: WorkerFileMeta[] = [];
       for (const f of files) {
+        const key = `${f.name}-${f.size}-${Date.now()}`;
+        setUploadProgress(prev => ({ ...prev, [key]: 5 }));
         const dataUrl = await toBase64DataUrl(f);
-        const saved = await uploadWorkerFile({
+        setUploadProgress(prev => ({ ...prev, [key]: 40 }));
+        const saved: WorkerFileMeta = await uploadWorkerFile({
           category,
           file_name: f.name,
           mime_type: f.type,
           data_url: dataUrl,
         });
-        uploaded.push(saved);
-      }
+        setUploadProgress(prev => ({ ...prev, [key]: 90 }));
 
-      setProfile(prev => {
-        const cur = prev.files || emptyFiles();
-        return {
-          ...prev,
-          files: {
-            ...cur,
-            [category]: [...(cur[category] || []), ...uploaded],
+        const folder = activeFolder;
+        setStoredFiles(prev => [
+          {
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            workerId,
+            folder,
+            uid: saved.uid,
+            name: saved.original_name,
+            size: saved.size,
+            mimeType: saved.mime_type,
+            uploadTime: new Date().toLocaleString(),
           },
-        };
-      });
+          ...prev,
+        ]);
+        setUploadProgress(prev => ({ ...prev, [key]: 100 }));
+      }
     } catch (err: any) {
       alert(`檔案上傳失敗：${err?.response?.data?.error || err?.message || '未知錯誤'}`);
     } finally {
       setUploadingCategory(null);
+      setTimeout(() => setUploadProgress({}), 600);
     }
   };
 
-  const handleDeleteFile = async (category: FileTab, uid: string) => {
+  const handleUploadFromInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!selectedWorkerForFiles) return;
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    await processUploadFiles(files, folderToCategory(activeFolder), selectedWorkerForFiles.id);
+    if (uploadInputRef.current) uploadInputRef.current.value = '';
+  };
+
+  const handleDropUpload = async (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setDragOver(false);
+    if (!selectedWorkerForFiles) return;
+    const files = Array.from(e.dataTransfer.files || []);
+    if (files.length === 0) return;
+    await processUploadFiles(files, folderToCategory(activeFolder), selectedWorkerForFiles.id);
+  };
+
+  const handleDeleteStoredFile = async (id: string, uid: string) => {
     try {
       await deleteWorkerFile(uid);
     } catch {
     } finally {
-      setProfile(prev => {
-        const cur = prev.files || emptyFiles();
-        return {
-          ...prev,
-          files: {
-            ...cur,
-            [category]: (cur[category] || []).filter(x => x.uid !== uid),
-          },
-        };
-      });
+      setStoredFiles(prev => prev.filter(f => f.id !== id));
     }
+  };
+
+  const handleDownloadStoredFile = (f: StoredFile) => {
+    alert(`目前示範模式，請到後端檔案服務下載：${f.name}`);
   };
 
   const handleOpenCreate = () => {
@@ -339,7 +386,7 @@ const Workers: React.FC = () => {
       id_card_number: worker.id_card_number || '',
       labour_status: labourStatusToUi(worker.labour_status),
       contract_salary: worker.contract_salary || '',
-      employment_term: worker.employment_term || '',
+      employment_term: parseEmploymentMonths(worker.employment_term),
       employer_id: worker.employer_id,
       approval_id: (worker as any).approval_id,
     });
@@ -389,6 +436,30 @@ const Workers: React.FC = () => {
     setIsModalOpen(true);
   };
 
+  const handleOpenDelete = (worker: Worker) => {
+    setDeleteTarget(worker);
+    setDeleteModalOpen(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setSaving(true);
+    const targetId = deleteTarget.id;
+    const prev = workers;
+    setWorkers(prev.filter(w => w.id !== targetId));
+    try {
+      await deleteWorker(targetId);
+      setDeleteModalOpen(false);
+      setDeleteTarget(null);
+      fetchWorkers();
+    } catch {
+      setWorkers(prev);
+      alert('刪除失敗，已復原列表');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const formatApiError = (err: any) => {
     const status = err?.response?.status as number | undefined;
     const data = err?.response?.data;
@@ -416,7 +487,7 @@ const Workers: React.FC = () => {
       id_card_number: idCard,
       labour_status: labourStatusToApi(String(formData.labour_status || '在職')),
       contract_salary: String(formData.contract_salary || '').trim(),
-      employment_term: formData.employment_term,
+      employment_term: formatEmploymentMonths(formData.employment_term),
       employer_id: employerId,
     };
     if (id) return updateWorker(id, minimal);
@@ -485,6 +556,7 @@ const Workers: React.FC = () => {
         mailing_address: String(profile.mailing_address || '').trim() || undefined,
         marital_status: profile.marital_status,
         contract_salary: String(formData.contract_salary || '').trim() || undefined,
+        employment_term: formatEmploymentMonths(formData.employment_term) || undefined,
         entry_refused: Boolean(profile.entry_refused),
         entry_refused_date: profile.entry_refused_date ? normalizeDate(profile.entry_refused_date) : undefined,
         entry_refused_reason: String(profile.entry_refused_reason || '').trim() || undefined,
@@ -654,11 +726,25 @@ const Workers: React.FC = () => {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                         <button
+                          onClick={() => openWorkerFiles(worker)}
+                          className="text-apple-blue hover:text-blue-900 bg-blue-50 hover:bg-blue-100 p-2 rounded-full transition-colors mr-2"
+                          title="存檔"
+                        >
+                          <FolderOpen className="w-4 h-4" />
+                        </button>
+                        <button
                           onClick={() => handleOpenEdit(worker)}
                           className="text-apple-blue hover:text-blue-900 bg-blue-50 hover:bg-blue-100 p-2 rounded-full transition-colors"
                           title="編輯"
                         >
                           <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleOpenDelete(worker)}
+                          className="text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 p-2 rounded-full transition-colors ml-2"
+                          title="刪除"
+                        >
+                          <Trash2 className="w-4 h-4" />
                         </button>
                       </td>
                     </tr>
@@ -717,7 +803,7 @@ const Workers: React.FC = () => {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">聯繫電話</label>
-              <div className="flex gap-2">
+              <div className="flex flex-col sm:flex-row gap-2">
                 <div className="relative w-28">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                     <Phone className="h-4 w-4 text-gray-400" />
@@ -725,7 +811,10 @@ const Workers: React.FC = () => {
                   <select
                     value={profile.phone_code || '+852'}
                     onChange={(e) => setProfile(prev => ({ ...prev, phone_code: e.target.value as any }))}
-                    className="w-full pl-9 pr-2 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                    className={clsx(
+                      "w-full pl-9 pr-2 py-2 bg-white border rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all",
+                      profile.phone_number && !isPhoneNumber(profile.phone_number) ? 'border-red-300' : 'border-gray-200'
+                    )}
                   >
                     {PHONE_CODES.map(code => (
                       <option key={code} value={code}>{code}</option>
@@ -940,14 +1029,21 @@ const Workers: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">僱傭期限</label>
-              <input
-                type="text"
-                value={formData.employment_term}
-                onChange={(e) => setFormData({ ...formData, employment_term: e.target.value })}
-                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
-                placeholder="例如：2年"
-              />
+              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">僱傭期限（月）</label>
+              <div className="relative">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={String(formData.employment_term || '')}
+                  onChange={(e) => setFormData({ ...formData, employment_term: e.target.value.replace(/\D/g, '').slice(0, 3) })}
+                  className="w-full px-4 py-2 pr-16 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                  placeholder="例如：24"
+                />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-gray-500">個月</span>
+              </div>
+              {formData.employment_term && (
+                <p className="text-xs text-gray-500 mt-1 ml-1">將儲存為：{formatEmploymentMonths(formData.employment_term)}</p>
+              )}
             </div>
           </div>
 
@@ -1166,69 +1262,14 @@ const Workers: React.FC = () => {
             )}
           </div>
 
-          <div className="bg-white/50 border border-gray-200/50 rounded-apple-sm p-4 space-y-4">
-            <div className="flex items-center gap-2 text-sm font-medium text-gray-800">
-              <FileUp className="w-4 h-4 text-gray-500" />
-              <span>文件上傳</span>
+          <div className="bg-blue-50/60 border border-blue-100 rounded-apple-sm p-4">
+            <div className="flex items-center gap-2 text-sm font-medium text-blue-800">
+              <FolderOpen className="w-4 h-4" />
+              <span>文件上傳說明</span>
             </div>
-            <div className="flex flex-wrap gap-2">
-              {(['id_docs', 'education_docs', 'work_docs'] as FileTab[]).map(c => (
-                <button
-                  key={c}
-                  type="button"
-                  onClick={() => handleChooseCategory(c)}
-                  className={clsx(
-                    'px-3 py-2 rounded-apple-sm text-sm border transition-colors',
-                    activeFileTab === c
-                      ? 'bg-apple-blue text-white border-apple-blue'
-                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                  )}
-                  disabled={uploadingCategory === c}
-                >
-                  {uploadingCategory === c ? '上傳中...' : categoryLabel(c)}
-                </button>
-              ))}
-            </div>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept=".pdf,.jpg,.jpeg,.png"
-              className="hidden"
-              onChange={handleFileSelected}
-            />
-            <div className="space-y-3">
-              {(['id_docs', 'education_docs', 'work_docs'] as FileTab[]).map(c => {
-                const files = profile.files?.[c] || [];
-                return (
-                  <div key={c} className="rounded-apple-sm border border-gray-200 bg-white p-3">
-                    <div className="text-sm font-medium text-gray-700 mb-2">{categoryLabel(c)}</div>
-                    {files.length === 0 ? (
-                      <div className="text-xs text-gray-500">未上傳檔案</div>
-                    ) : (
-                      <div className="space-y-2">
-                        {files.map(f => (
-                          <div key={f.uid} className="flex items-center justify-between gap-3 text-sm">
-                            <div className="min-w-0">
-                              <div className="truncate text-gray-800">{f.original_name}</div>
-                              <div className="text-xs text-gray-500">{(f.size / 1024).toFixed(1)} KB</div>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteFile(c, f.uid)}
-                              className="inline-flex items-center gap-1 px-2 py-1 text-xs text-red-600 bg-red-50 hover:bg-red-100 rounded"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                              <span>刪除</span>
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+            <p className="text-xs text-blue-700 mt-2">
+              勞工建立完成後，可於列表「存檔」按鈕進入文件空間，支援批次、拖曳上傳與進度顯示。
+            </p>
           </div>
 
           <div className="pt-4 flex justify-end space-x-3 border-t border-gray-100 mt-6">
@@ -1250,6 +1291,162 @@ const Workers: React.FC = () => {
           </div>
         </form>
       </Modal>
+
+      <Modal
+        isOpen={isFileModalOpen}
+        onClose={() => setIsFileModalOpen(false)}
+        title={`存檔空間 - ${selectedWorkerForFiles?.labour_name || ''}`}
+        className="max-w-4xl"
+      >
+        <div className="flex h-[500px] -mx-6 -mb-6 border-t border-gray-200">
+          <div className="w-48 bg-gray-50 border-r border-gray-200 p-4 space-y-2 shrink-0">
+            {FILE_FOLDERS.map(f => (
+              <button
+                key={f}
+                onClick={() => setActiveFolder(f)}
+                className={clsx(
+                  'w-full text-left px-3 py-2 rounded-apple-sm text-sm font-medium transition-colors flex items-center space-x-2',
+                  activeFolder === f ? 'bg-apple-blue text-white shadow-sm' : 'text-gray-600 hover:bg-gray-200'
+                )}
+              >
+                <FolderOpen className={clsx('w-4 h-4', activeFolder === f ? 'text-white' : 'text-gray-400')} />
+                <span>{f}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="flex-1 flex flex-col bg-white">
+            <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-white/50">
+              <h3 className="font-medium text-gray-800 flex items-center">
+                <span className="text-gray-400 mr-2">/</span>
+                {activeFolder}
+              </h3>
+              <div>
+                <input
+                  type="file"
+                  ref={uploadInputRef}
+                  className="hidden"
+                  multiple
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  onChange={handleUploadFromInput}
+                />
+                <button
+                  onClick={() => uploadInputRef.current?.click()}
+                  className="flex items-center space-x-2 bg-white border border-apple-blue text-apple-blue hover:bg-blue-50 px-3 py-1.5 rounded-apple-sm transition-colors text-sm font-medium"
+                >
+                  <UploadCloud className="w-4 h-4" />
+                  <span>上傳檔案</span>
+                </button>
+              </div>
+            </div>
+
+            <div
+              className={clsx(
+                'mx-4 mt-3 rounded-apple-sm border-2 border-dashed p-4 text-sm text-center transition-colors',
+                dragOver ? 'border-apple-blue bg-blue-50' : 'border-gray-200 bg-gray-50/40'
+              )}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragOver(true);
+              }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={handleDropUpload}
+            >
+              拖曳檔案到此處即可上傳（支援批次）
+            </div>
+
+            {Object.keys(uploadProgress).length > 0 && (
+              <div className="px-4 pt-3 space-y-2">
+                {Object.entries(uploadProgress).map(([k, v]) => (
+                  <div key={k}>
+                    <div className="flex justify-between text-xs text-gray-600 mb-1">
+                      <span className="truncate max-w-[70%]">{k}</span>
+                      <span>{Math.round(v)}%</span>
+                    </div>
+                    <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                      <div className="h-2 bg-apple-blue" style={{ width: `${v}%` }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex-1 overflow-y-auto p-4">
+              {storedFiles.filter(f => f.workerId === selectedWorkerForFiles?.id && f.folder === activeFolder).length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-gray-400 space-y-3">
+                  <FolderOpen className="w-12 h-12 text-gray-300" />
+                  <p>此資料夾目前沒有檔案</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {storedFiles
+                    .filter(f => f.workerId === selectedWorkerForFiles?.id && f.folder === activeFolder)
+                    .map(file => (
+                      <div key={file.id} className="flex items-center justify-between p-3 bg-white border border-gray-200 rounded-apple-sm hover:shadow-sm transition-shadow group">
+                        <div className="flex items-center space-x-3 overflow-hidden">
+                          <div className="p-2 bg-blue-50 text-apple-blue rounded-apple-sm shrink-0">
+                            <FolderOpen className="w-5 h-5" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-gray-900 truncate">{file.name}</p>
+                            <p className="text-xs text-gray-500 mt-0.5">{(file.size / 1024).toFixed(1)} KB • {file.uploadTime}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={() => handleDownloadStoredFile(file)}
+                            className="p-1.5 text-gray-500 hover:text-apple-blue hover:bg-blue-50 rounded-md transition-colors"
+                            title="下載"
+                          >
+                            <Download className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteStoredFile(file.id, file.uid)}
+                            className="p-1.5 text-gray-500 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors"
+                            title="刪除"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      {deleteModalOpen && deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-gray-900 rounded-apple w-full max-w-md p-6 shadow-xl border border-gray-800">
+            <h3 className="text-white font-semibold text-sm mb-4">系統提示</h3>
+            <p className="text-gray-200 text-base mb-8 leading-relaxed">
+              確定要刪除勞工「{deleteTarget.labour_name || '未命名'}」嗎？刪除後不可復原。
+            </p>
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => {
+                  setDeleteModalOpen(false);
+                  setDeleteTarget(null);
+                }}
+                disabled={saving}
+                className="px-5 py-2 rounded-apple-sm text-sm font-medium bg-gray-700 text-white hover:bg-gray-600 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={confirmDelete}
+                disabled={saving}
+                className="px-5 py-2 rounded-apple-sm text-sm font-medium bg-apple-blue text-white hover:bg-blue-600 transition-colors flex items-center"
+              >
+                {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                確認
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

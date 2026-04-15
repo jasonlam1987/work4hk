@@ -42,3 +42,8 @@ export const updateWorker = async (id: number, data: Partial<WorkerCreate>) => {
   const response = await apiClient.patch<Worker>(`/labours/${id}`, data);
   return response.data;
 };
+
+export const deleteWorker = async (id: number) => {
+  const response = await apiClient.delete(`/labours/${id}`);
+  return response.data;
+};
