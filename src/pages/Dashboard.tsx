@@ -4,13 +4,14 @@ import { useAuthStore } from '../store/authStore';
 import { getUsers } from '../api/users';
 import { getEmployers } from '../api/employers';
 import { getWorkers } from '../api/workers';
-import { getApprovals, Approval } from '../api/approvals';
+import { getApprovals, ApprovalReminder, getApprovalReminders, markApprovalReminderRead, reRemindApprovalReminder, setApprovalReminders } from '../api/approvals';
 import { parseEmploymentMonths } from '../utils/workersForm';
+import { generateApprovalReminders } from '../utils/approvalsRules';
 
 const Dashboard: React.FC = () => {
   const user = useAuthStore((state) => state.user);
   const [loading, setLoading] = useState(() => !sessionStorage.getItem('dashboardStats'));
-  const [warnings, setWarnings] = useState<Approval[]>([]);
+  const [warnings, setWarnings] = useState<ApprovalReminder[]>([]);
   const [workerRenewWarnings, setWorkerRenewWarnings] = useState<Array<{ id: number; name: string; daysLeft: number; expiresAt: string }>>([]);
   const [counts, setCounts] = useState(() => {
     const cached = sessionStorage.getItem('dashboardStats');
@@ -103,18 +104,19 @@ const Dashboard: React.FC = () => {
               return next;
             });
 
-            // 檢查即將到期的批文 (30天內)
-            const today = new Date();
-            const nextMonth = new Date();
-            nextMonth.setDate(today.getDate() + 30);
-            
-            const urgentApprovals = data.filter((approval: Approval) => {
-              if (!approval.valid_until) return false;
-              const validDate = new Date(approval.valid_until);
-              return validDate >= today && validDate <= nextMonth;
-            });
-            
-            setWarnings(urgentApprovals);
+            // 批文到期提醒：180/90/30（±1天），同一區間去重
+            const existing = getApprovalReminders();
+            const next = generateApprovalReminders(
+              data.map((a: any) => ({
+                id: Number(a.id),
+                approval_number: a.approval_number,
+                employer_name: a.employer_name,
+                expiry_date: a.expiry_date,
+              })),
+              existing
+            ) as ApprovalReminder[];
+            setApprovalReminders(next);
+            setWarnings(next.sort((a, b) => a.window_days - b.window_days));
             setLoading(false); // 批文載入完成後隱藏警告區塊的 loading
           }
         }).catch(err => {
@@ -210,15 +212,37 @@ const Dashboard: React.FC = () => {
                   <div className="w-2 h-2 bg-orange-500 rounded-full"></div>
                   <div>
                     <p className="text-sm font-medium text-gray-900">
-                      批文 {warning.approval_number} 即將到期
+                      {warning.message}
                     </p>
                     <p className="text-xs text-gray-500 mt-0.5">
-                      僱主：{warning.employer_name || '未指定'} | 配額：{warning.headcount || 0}人
+                      狀態：{warning.status === 'read' ? '已讀' : '未讀'}
                     </p>
                   </div>
                 </div>
-                <div className="text-sm font-medium text-orange-600">
-                  到期日：{warning.valid_until}
+                <div className="text-sm font-medium text-orange-600 text-right">
+                  <div>到期日：{warning.expiry_date}</div>
+                  <div className="mt-2 flex gap-2 justify-end">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        markApprovalReminderRead(warning.id);
+                        setWarnings(prev => prev.map(x => (x.id === warning.id ? { ...x, status: 'read' } : x)));
+                      }}
+                      className="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-700"
+                    >
+                      標記已讀
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        reRemindApprovalReminder(warning.id);
+                        setWarnings(prev => prev.map(x => (x.id === warning.id ? { ...x, status: 'unread' } : x)));
+                      }}
+                      className="px-2 py-1 text-xs rounded bg-blue-50 hover:bg-blue-100 text-blue-700"
+                    >
+                      再次提醒
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}

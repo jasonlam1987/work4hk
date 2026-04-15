@@ -7,32 +7,180 @@ export interface Approval {
   partner_id: number;
   partner_name?: string;
   approval_number: string;
-  department?: string;
+  department?: '勞工處' | '發展局' | '機管局' | '福利處' | '運輸署' | string;
   issue_date?: string;
-  valid_until?: string;
-  headcount?: number;
+  expiry_date?: string;
   signatory_name?: string;
+  quota_details?: QuotaDetail[];
   [key: string]: any;
 }
 
 export type ApprovalCreate = Partial<Omit<Approval, 'id' | 'employer_name' | 'employer_code' | 'partner_name' | 'created_at' | 'updated_at'>>;
 
+export type QuotaDetail = {
+  quota_seq: string;
+  work_location: string;
+  job_title: string;
+  monthly_salary: number;
+  work_hours: string;
+  employment_months: number;
+};
+
+export type ApprovalReminder = {
+  id: string;
+  approval_id: number;
+  approval_number: string;
+  company_name: string;
+  window_days: 180 | 90 | 30;
+  expiry_date: string;
+  message: string;
+  status: 'unread' | 'read';
+  created_at: string;
+  updated_at: string;
+};
+
+export type ApprovalVersionLog = {
+  id: string;
+  approval_id: number;
+  action: 'department_changed' | 'quota_deleted';
+  detail: string;
+  operator: string;
+  created_at: string;
+};
+
 const MOCK_STORAGE_KEY = 'mock_approvals';
+const QUOTA_STORAGE_KEY = 'approval_quota_details_v1';
+const VERSION_STORAGE_KEY = 'approval_versions_v1';
+const REMINDER_STORAGE_KEY = 'approval_reminders_v1';
 const ENABLE_MOCK_APPROVALS = import.meta.env.DEV;
+export const DEPARTMENT_OPTIONS = ['勞工處', '發展局', '機管局', '福利處', '運輸署'] as const;
+
+const normalizeDate = (v?: any) => {
+  const s = String(v || '').trim();
+  if (!s) return '';
+  const base = s.includes('T') ? s.split('T')[0] : s;
+  return /^\d{4}\/\d{2}\/\d{2}$/.test(base) ? base.replace(/\//g, '-') : base;
+};
+
+const calcExpiryDate = (issueDate: string) => {
+  const d = new Date(issueDate);
+  if (Number.isNaN(d.getTime())) return '';
+  const exp = new Date(d);
+  exp.setMonth(exp.getMonth() + 12);
+  return exp.toISOString().slice(0, 10);
+};
+
+const readQuotaMap = (): Record<string, QuotaDetail[]> => {
+  try {
+    const raw = localStorage.getItem(QUOTA_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const writeQuotaMap = (map: Record<string, QuotaDetail[]>) => {
+  localStorage.setItem(QUOTA_STORAGE_KEY, JSON.stringify(map));
+};
+
+export const getApprovalQuotaDetails = (approvalId: number): QuotaDetail[] => {
+  const map = readQuotaMap();
+  return Array.isArray(map[String(approvalId)]) ? map[String(approvalId)] : [];
+};
+
+export const setApprovalQuotaDetails = (approvalId: number, details: QuotaDetail[]) => {
+  const map = readQuotaMap();
+  map[String(approvalId)] = details;
+  writeQuotaMap(map);
+};
+
+const readVersionLogs = (): ApprovalVersionLog[] => {
+  try {
+    const raw = localStorage.getItem(VERSION_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const writeVersionLogs = (items: ApprovalVersionLog[]) => {
+  localStorage.setItem(VERSION_STORAGE_KEY, JSON.stringify(items));
+};
+
+export const appendApprovalVersionLog = (log: Omit<ApprovalVersionLog, 'id' | 'created_at'>) => {
+  const list = readVersionLogs();
+  list.unshift({
+    ...log,
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    created_at: new Date().toISOString(),
+  });
+  writeVersionLogs(list.slice(0, 1000));
+};
+
+export const getApprovalVersionLogs = (approvalId: number) => {
+  return readVersionLogs().filter(x => x.approval_id === approvalId);
+};
+
+export const getApprovalReminders = (): ApprovalReminder[] => {
+  try {
+    const raw = localStorage.getItem(REMINDER_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+export const setApprovalReminders = (items: ApprovalReminder[]) => {
+  localStorage.setItem(REMINDER_STORAGE_KEY, JSON.stringify(items));
+};
+
+export const markApprovalReminderRead = (id: string) => {
+  const list = getApprovalReminders().map(r => (r.id === id ? { ...r, status: 'read' as const, updated_at: new Date().toISOString() } : r));
+  setApprovalReminders(list);
+};
+
+export const reRemindApprovalReminder = (id: string) => {
+  const list = getApprovalReminders().map(r => (r.id === id ? { ...r, status: 'unread' as const, updated_at: new Date().toISOString() } : r));
+  setApprovalReminders(list);
+};
 
 const readMockApprovals = (): Approval[] => {
   try {
     const raw = localStorage.getItem(MOCK_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as Approval[]) : [];
+    const list = Array.isArray(parsed) ? (parsed as Approval[]) : [];
+    return list.map(a => {
+      const issue = normalizeDate((a as any).issue_date);
+      const expiry = normalizeDate((a as any).expiry_date) || (issue ? calcExpiryDate(issue) : '');
+      return {
+        ...a,
+        issue_date: issue || undefined,
+        expiry_date: expiry || undefined,
+      };
+    });
   } catch {
     return [];
   }
 };
 
 const writeMockApprovals = (items: Approval[]) => {
-  localStorage.setItem(MOCK_STORAGE_KEY, JSON.stringify(items));
+  const normalized = items.map(a => {
+    const issue = normalizeDate((a as any).issue_date);
+    const expiry = normalizeDate((a as any).expiry_date) || (issue ? calcExpiryDate(issue) : '');
+    return {
+      ...a,
+      issue_date: issue || undefined,
+      expiry_date: expiry || undefined,
+    };
+  });
+  localStorage.setItem(MOCK_STORAGE_KEY, JSON.stringify(normalized));
 };
 
 const shouldFallbackToMock = (err: any, allowProd = false) => {
@@ -51,7 +199,16 @@ export const getApprovals = async (params?: { q?: string; limit?: number; offset
       params: cleanedParams,
       timeout: 30000,
     });
-    const serverList = Array.isArray(response.data) ? response.data : [];
+    const serverListRaw = Array.isArray(response.data) ? response.data : [];
+    const serverList: Approval[] = serverListRaw.map((a: any) => {
+      const issue = normalizeDate((a as any).issue_date);
+      const expiry = normalizeDate((a as any).expiry_date) || normalizeDate((a as any).valid_until) || (issue ? calcExpiryDate(issue) : '');
+      return {
+        ...a,
+        issue_date: issue || undefined,
+        expiry_date: expiry || undefined,
+      } as Approval;
+    });
     if (!ENABLE_MOCK_APPROVALS) {
       const q = (cleanedParams.q || '').toLowerCase();
       if (!q) return serverList;
@@ -90,19 +247,27 @@ export const getApprovals = async (params?: { q?: string; limit?: number; offset
 };
 
 export const createApproval = async (data: ApprovalCreate) => {
+  const normalizedIssue = normalizeDate((data as any).issue_date);
+  const normalizedDepartment = String((data as any).department || '勞工處').trim();
+  const normalizedPayload: ApprovalCreate = {
+    ...data,
+    department: DEPARTMENT_OPTIONS.includes(normalizedDepartment as any) ? normalizedDepartment : '勞工處',
+    issue_date: normalizedIssue || undefined,
+    expiry_date: normalizedIssue ? calcExpiryDate(normalizedIssue) : undefined,
+  };
+
   const buildMock = () => {
     const list = readMockApprovals();
     const nextId = list.length > 0 ? Math.max(...list.map(a => a.id || 0)) + 1 : 1;
     const item: Approval = {
       id: nextId,
-      employer_id: Number(data.employer_id),
-      partner_id: Number(data.partner_id),
-      approval_number: String(data.approval_number || ''),
-      department: data.department as any,
-      issue_date: data.issue_date as any,
-      valid_until: data.valid_until as any,
-      headcount: typeof data.headcount === 'number' ? data.headcount : undefined,
-      signatory_name: data.signatory_name as any,
+      employer_id: Number(normalizedPayload.employer_id),
+      partner_id: Number(normalizedPayload.partner_id),
+      approval_number: String(normalizedPayload.approval_number || ''),
+      department: normalizedPayload.department as any,
+      issue_date: normalizedPayload.issue_date as any,
+      expiry_date: normalizedPayload.expiry_date as any,
+      signatory_name: normalizedPayload.signatory_name as any,
       __localOnly: true,
     };
     const next = [item, ...list];
@@ -111,32 +276,23 @@ export const createApproval = async (data: ApprovalCreate) => {
   };
 
   try {
-    const response = await apiClient.post<Approval>('/approvals', data);
+    const response = await apiClient.post<Approval>('/approvals', normalizedPayload);
     return response.data;
   } catch (err: any) {
     const status = err?.response?.status as number | undefined;
     if (status !== 500) throw err;
 
     const retryPayloads: ApprovalCreate[] = [
+      normalizedPayload,
       {
-        employer_id: data.employer_id,
-        partner_id: data.partner_id,
-        approval_number: data.approval_number,
-        department: data.department,
-        headcount: data.headcount,
-        signatory_name: data.signatory_name,
+        employer_id: normalizedPayload.employer_id,
+        partner_id: normalizedPayload.partner_id,
+        approval_number: normalizedPayload.approval_number,
+        department: normalizedPayload.department,
+        issue_date: normalizedPayload.issue_date,
+        expiry_date: normalizedPayload.expiry_date,
       },
-      {
-        employer_id: data.employer_id,
-        partner_id: data.partner_id,
-        approval_number: data.approval_number,
-        headcount: typeof data.headcount === 'number' ? data.headcount : 0,
-      },
-      {
-        employer_id: data.employer_id,
-        partner_id: data.partner_id,
-        approval_number: data.approval_number,
-      },
+      { employer_id: normalizedPayload.employer_id, partner_id: normalizedPayload.partner_id, approval_number: normalizedPayload.approval_number },
     ];
 
     for (const p of retryPayloads) {
@@ -155,8 +311,18 @@ export const createApproval = async (data: ApprovalCreate) => {
 };
 
 export const updateApproval = async (id: number, data: Partial<ApprovalCreate>) => {
+  const nextData: Partial<ApprovalCreate> = { ...data };
+  if ((data as any).department !== undefined) {
+    const dept = String((data as any).department || '').trim();
+    (nextData as any).department = DEPARTMENT_OPTIONS.includes(dept as any) ? dept : '勞工處';
+  }
+  if ((data as any).issue_date !== undefined) {
+    const issue = normalizeDate((data as any).issue_date);
+    (nextData as any).issue_date = issue || undefined;
+    (nextData as any).expiry_date = issue ? calcExpiryDate(issue) : undefined;
+  }
   try {
-    const response = await apiClient.patch<Approval>(`/approvals/${id}`, data);
+    const response = await apiClient.patch<Approval>(`/approvals/${id}`, nextData);
     return response.data;
   } catch (err: any) {
     const status = err?.response?.status as number | undefined;
@@ -172,12 +338,12 @@ export const updateApproval = async (id: number, data: Partial<ApprovalCreate>) 
           ? list[idx]
           : {
               id,
-              employer_id: Number((data as any)?.employer_id || 0),
-              partner_id: Number((data as any)?.partner_id || 0),
-              approval_number: String((data as any)?.approval_number || ''),
+              employer_id: Number((nextData as any)?.employer_id || 0),
+              partner_id: Number((nextData as any)?.partner_id || 0),
+              approval_number: String((nextData as any)?.approval_number || ''),
             };
 
-      const updated: Approval = { ...base, ...(data as any) };
+      const updated: Approval = { ...base, ...(nextData as any) };
       const next = idx >= 0 ? [...list] : [updated, ...list];
       if (idx >= 0) next[idx] = updated;
       writeMockApprovals(next);
@@ -189,7 +355,7 @@ export const updateApproval = async (id: number, data: Partial<ApprovalCreate>) 
     const list = readMockApprovals();
     const idx = list.findIndex(a => a.id === id);
     if (idx === -1) throw err;
-    const updated: Approval = { ...list[idx], ...(data as any) };
+    const updated: Approval = { ...list[idx], ...(nextData as any) };
     const next = [...list];
     next[idx] = updated;
     writeMockApprovals(next);
@@ -219,6 +385,9 @@ export const deleteApproval = async (id: number) => {
     const list = readMockApprovals();
     const next = list.filter(a => a.id !== id);
     writeMockApprovals(next);
+    const quotaMap = readQuotaMap();
+    delete quotaMap[String(id)];
+    writeQuotaMap(quotaMap);
     return { ok: true };
   }
 };

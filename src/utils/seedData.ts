@@ -31,8 +31,11 @@ export const seedMockData = async () => {
       employer_id: e1.id, 
       partner_id: 1, 
       approval_number: 'APP-2023-001', 
-      headcount: 50, 
-      valid_until: '2024-12-31',
+      issue_date: '2024-01-01',
+      expiry_date: '2025-01-01',
+      quota_details: [
+        { quota_seq: '0001', work_location: '香港中環', job_title: '建築工人', monthly_salary: 15000, work_hours: '每週6天，每天8小時', employment_months: 24 },
+      ],
       department: '勞工處',
       signatory_name: '張主任'
     });
@@ -44,8 +47,11 @@ export const seedMockData = async () => {
       employer_id: e2.id, 
       partner_id: 1, 
       approval_number: 'APP-2023-002', 
-      headcount: 20, 
-      valid_until: urgentDate.toISOString().split('T')[0],
+      issue_date: '2024-07-01',
+      expiry_date: urgentDate.toISOString().split('T')[0],
+      quota_details: [
+        { quota_seq: '0001', work_location: '香港旺角', job_title: '餐廳服務員', monthly_salary: 12000, work_hours: '每週6天，每天10小時', employment_months: 12 },
+      ],
       department: '勞工處',
       signatory_name: '李主任'
     });

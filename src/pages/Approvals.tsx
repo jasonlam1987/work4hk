@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Search, Edit2, Loader2, RefreshCw, Trash2, FolderOpen, UploadCloud, Download, FileText } from 'lucide-react';
-import { Approval, getApprovals, createApproval, updateApproval, deleteApproval, ApprovalCreate } from '../api/approvals';
+import { Approval, getApprovals, createApproval, updateApproval, deleteApproval, ApprovalCreate, DEPARTMENT_OPTIONS, QuotaDetail, getApprovalQuotaDetails, setApprovalQuotaDetails, appendApprovalVersionLog } from '../api/approvals';
 import { Employer, getEmployers } from '../api/employers';
 import { Partner, getPartners } from '../api/settings';
 import Modal from '../components/Modal';
@@ -15,6 +15,16 @@ interface StoredApprovalFile {
   uploadTime: string;
 }
 
+type QuotaDetailForm = {
+  quota_seq: string;
+  work_location: string;
+  job_title: string;
+  monthly_salary: string;
+  work_hours: string;
+  employment_months: string;
+  _deleted?: boolean;
+};
+
 const APPROVAL_FOLDERS = ['批文文件', '申請文件', '其他'];
 
 const initialForm: ApprovalCreate = {
@@ -22,9 +32,17 @@ const initialForm: ApprovalCreate = {
   partner_id: undefined,
   approval_number: '',
   department: '勞工處',
-  headcount: 0,
   signatory_name: ''
 };
+
+const emptyQuotaRow = (): QuotaDetailForm => ({
+  quota_seq: '',
+  work_location: '',
+  job_title: '',
+  monthly_salary: '',
+  work_hours: '',
+  employment_months: '',
+});
 
 const APPROVALS_CACHE_KEY = 'cache_approvals_list_v1';
 
@@ -42,6 +60,8 @@ const Approvals: React.FC = () => {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [formData, setFormData] = useState<ApprovalCreate>(initialForm);
   const [saving, setSaving] = useState(false);
+  const [quotaDetails, setQuotaDetails] = useState<QuotaDetailForm[]>([]);
+  const [quotaDeleteTarget, setQuotaDeleteTarget] = useState<number | null>(null);
 
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; approvalNumber: string } | null>(null);
@@ -189,6 +209,27 @@ const Approvals: React.FC = () => {
     return v;
   };
 
+  const calcExpiryDate = (issue: string) => {
+    const base = toDateInput(issue);
+    if (!base) return '';
+    const d = new Date(base);
+    if (Number.isNaN(d.getTime())) return '';
+    d.setMonth(d.getMonth() + 12);
+    return d.toISOString().slice(0, 10);
+  };
+
+  const formatSalary = (raw: string) => {
+    const n = Number(String(raw || '').replace(/[^\d]/g, ''));
+    if (!Number.isFinite(n)) return '';
+    return String(n);
+  };
+
+  const prettySalary = (raw: string) => {
+    const n = Number(formatSalary(raw));
+    if (!Number.isFinite(n)) return '';
+    return new Intl.NumberFormat('zh-HK').format(n);
+  };
+
   const formatApiError = (err: any) => {
     const status = err?.response?.status as number | undefined;
     const data = err?.response?.data;
@@ -314,6 +355,7 @@ const Approvals: React.FC = () => {
 
   const handleOpenCreate = () => {
     setFormData(initialForm);
+    setQuotaDetails([emptyQuotaRow()]);
     setEmployerQuery('');
     setPartnerQuery('');
     setEmployerDropdownOpen(false);
@@ -333,11 +375,23 @@ const Approvals: React.FC = () => {
       partner_id: partnerId,
       approval_number: String(approval.approval_number || '').toUpperCase(),
       department: approval.department || '勞工處',
-      headcount: approval.headcount || 0,
       signatory_name: approval.signatory_name || '',
       issue_date: (approval as any).issue_date ? toDateInput(String((approval as any).issue_date)) : '',
-      valid_until: (approval as any).valid_until ? toDateInput(String((approval as any).valid_until)) : ''
+      expiry_date: (approval as any).expiry_date ? toDateInput(String((approval as any).expiry_date)) : ''
     });
+    const existingQuotas = getApprovalQuotaDetails(approval.id);
+    setQuotaDetails(
+      existingQuotas.length > 0
+        ? existingQuotas.map(q => ({
+            quota_seq: q.quota_seq,
+            work_location: q.work_location,
+            job_title: q.job_title,
+            monthly_salary: String(q.monthly_salary),
+            work_hours: q.work_hours,
+            employment_months: String(q.employment_months),
+          }))
+        : [emptyQuotaRow()]
+    );
     setEmployerQuery(getEmployerDisplayById(employerId, approval.employer_name));
     setPartnerQuery(getPartnerDisplayById(partnerId, approval.partner_name));
     ensureLookupsLoaded();
@@ -471,6 +525,56 @@ const Approvals: React.FC = () => {
     };
   }, [isModalOpen]);
 
+  const handleDepartmentChange = async (nextDept: string) => {
+    setFormData(prev => ({ ...prev, department: nextDept }));
+    if (!isEditing || !selectedId) return;
+    try {
+      await updateApproval(selectedId, { department: nextDept });
+      appendApprovalVersionLog({
+        approval_id: selectedId,
+        action: 'department_changed',
+        detail: `發證部門變更為「${nextDept}」`,
+        operator: 'admin',
+      });
+      setApprovals(prev => prev.map(a => (a.id === selectedId ? { ...a, department: nextDept } : a)));
+    } catch (err: any) {
+      alert(formatApiError(err));
+    }
+  };
+
+  const validateQuotaRows = () => {
+    const rows = quotaDetails.filter(r => !r._deleted);
+    if (rows.length === 0) return { ok: false, message: '請至少新增一筆配額明細' };
+    const seqSet = new Set<string>();
+    for (const r of rows) {
+      const seq = String(r.quota_seq || '').replace(/[^\d]/g, '').padStart(4, '0').slice(-4);
+      if (!seq) return { ok: false, message: '配額序號為必填（4位數字）' };
+      if (seqSet.has(seq)) return { ok: false, message: `配額序號重複：${seq}` };
+      seqSet.add(seq);
+      if (!String(r.work_location || '').trim() || String(r.work_location).trim().length > 200) return { ok: false, message: '工作地點為必填，且不得超過200字' };
+      if (!String(r.job_title || '').trim() || String(r.job_title).trim().length > 100) return { ok: false, message: '職位名稱為必填，且不得超過100字' };
+      const salary = Number(formatSalary(r.monthly_salary));
+      if (!Number.isInteger(salary) || salary < 0) return { ok: false, message: '每月工資為必填整數，且需大於或等於0' };
+      if (!String(r.work_hours || '').trim() || String(r.work_hours).trim().length > 100) return { ok: false, message: '工作時間為必填，且不得超過100字' };
+      const m = Number(String(r.employment_months || '').replace(/[^\d]/g, ''));
+      if (!Number.isInteger(m) || m < 1 || m > 120) return { ok: false, message: '僱用期為必填月數，範圍1-120' };
+    }
+    return { ok: true, rows };
+  };
+
+  const serializeQuotaRows = (): QuotaDetail[] => {
+    return quotaDetails
+      .filter(r => !r._deleted)
+      .map((r) => ({
+        quota_seq: String(r.quota_seq || '').replace(/[^\d]/g, '').padStart(4, '0').slice(-4),
+        work_location: String(r.work_location || '').trim(),
+        job_title: String(r.job_title || '').trim(),
+        monthly_salary: Number(formatSalary(r.monthly_salary)),
+        work_hours: String(r.work_hours || '').trim(),
+        employment_months: Number(String(r.employment_months || '').replace(/[^\d]/g, '')),
+      }));
+  };
+
   useEffect(() => {
     if (!isModalOpen) {
       if (employerBlurTimer.current) {
@@ -494,6 +598,27 @@ const Approvals: React.FC = () => {
     }
     if (!formData.approval_number || !String(formData.approval_number).trim()) {
       alert('請填寫批文編號');
+      return;
+    }
+    const dept = String(formData.department || '').trim();
+    if (!DEPARTMENT_OPTIONS.includes(dept as any)) {
+      alert('請選擇正確的發證部門');
+      return;
+    }
+    const issueDate = toDateInput(String(formData.issue_date || ''));
+    if (!issueDate) {
+      alert('請填寫發證日期');
+      return;
+    }
+    const today = new Date();
+    const issueObj = new Date(issueDate);
+    if (Number.isNaN(issueObj.getTime()) || issueObj.getTime() > today.getTime()) {
+      alert('發證日期不可大於今日');
+      return;
+    }
+    const quotaValidation = validateQuotaRows();
+    if (!quotaValidation.ok) {
+      alert(quotaValidation.message);
       return;
     }
 
@@ -525,20 +650,24 @@ const Approvals: React.FC = () => {
       employer_id: formData.employer_id,
       partner_id: partnerId,
       approval_number: approvalNo,
-      department: String(formData.department || '').trim() || '勞工處',
-      headcount: (typeof formData.headcount === 'number' && !isNaN(formData.headcount)) ? formData.headcount : 0,
+      department: dept || '勞工處',
       signatory_name: String(formData.signatory_name || '').trim() || "",
-      issue_date: formData.issue_date ? toApiDate(String(formData.issue_date)) : null as any,
-      valid_until: formData.valid_until ? toApiDate(String(formData.valid_until)) : null as any,
+      issue_date: toApiDate(issueDate),
+      expiry_date: calcExpiryDate(issueDate),
+      quota_details: serializeQuotaRows(),
     };
 
     setSaving(true);
     try {
       const save = async (data: ApprovalCreate) => {
         if (isEditing && selectedId) {
-          await updateApproval(selectedId, data);
+          const updated = await updateApproval(selectedId, data);
+          setApprovalQuotaDetails(selectedId, serializeQuotaRows());
+          return updated;
         } else {
-          await createApproval(data);
+          const created = await createApproval(data);
+          if (created?.id) setApprovalQuotaDetails(Number(created.id), serializeQuotaRows());
+          return created;
         }
       };
 
@@ -617,8 +746,8 @@ const Approvals: React.FC = () => {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">批文編號</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">所屬僱主</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">簽署人</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">配額數量</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">有效期限</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">配額明細</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">截止日期</th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
               </tr>
             </thead>
@@ -664,10 +793,10 @@ const Approvals: React.FC = () => {
                       {approval.signatory_name || '-'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-apple-dark">
-                      {approval.headcount || 0}
+                      {getApprovalQuotaDetails(approval.id).length} 筆
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {formatDateDisplay((approval as any).valid_until ?? (approval as any).validUntil)}
+                        {formatDateDisplay((approval as any).expiry_date)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                       <button
@@ -729,6 +858,47 @@ const Approvals: React.FC = () => {
                 className="px-5 py-2 rounded-apple-sm text-sm font-medium bg-red-600 text-white hover:bg-red-700 transition-colors flex items-center"
               >
                 {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                確認刪除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {quotaDeleteTarget !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-gray-900 rounded-apple w-full max-w-md p-6 shadow-xl border border-gray-800">
+            <h3 className="text-white font-semibold text-sm mb-4">系統提示</h3>
+            <p className="text-gray-200 text-base mb-8 leading-relaxed">
+              確定要刪除這筆配額明細嗎？刪除後將留下版本紀錄。
+            </p>
+            <div className="flex justify-end space-x-3">
+              <button
+                type="button"
+                onClick={() => setQuotaDeleteTarget(null)}
+                className="px-5 py-2 rounded-apple-sm text-sm font-medium bg-gray-700 text-white hover:bg-gray-600 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const idx = quotaDeleteTarget;
+                  if (idx === null) return;
+                  const seq = quotaDetails[idx]?.quota_seq || `row-${idx + 1}`;
+                  setQuotaDetails(prev => prev.filter((_, i) => i !== idx));
+                  if (isEditing && selectedId) {
+                    appendApprovalVersionLog({
+                      approval_id: selectedId,
+                      action: 'quota_deleted',
+                      detail: `刪除配額明細：序號 ${String(seq).padStart(4, '0')}`,
+                      operator: 'admin',
+                    });
+                  }
+                  setQuotaDeleteTarget(null);
+                }}
+                className="px-5 py-2 rounded-apple-sm text-sm font-medium bg-red-600 text-white hover:bg-red-700 transition-colors"
+              >
                 確認刪除
               </button>
             </div>
@@ -968,21 +1138,16 @@ const Approvals: React.FC = () => {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">發證部門</label>
-              <input
-                type="text"
-                value={formData.department}
-                onChange={(e) => setFormData({...formData, department: e.target.value})}
+              <select
+                value={String(formData.department || '勞工處')}
+                onChange={(e) => handleDepartmentChange(e.target.value)}
                 className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">配額數量</label>
-              <input
-                type="number"
-                value={formData.headcount}
-                onChange={(e) => setFormData({...formData, headcount: Number(e.target.value)})}
-                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
-              />
+                required
+              >
+                {DEPARTMENT_OPTIONS.map(opt => (
+                  <option key={opt} value={opt}>{opt}</option>
+                ))}
+              </select>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">簽署人姓名</label>
@@ -998,19 +1163,133 @@ const Approvals: React.FC = () => {
               <input
                 type="date"
                 value={formData.issue_date || ''}
-                onChange={(e) => setFormData({...formData, issue_date: e.target.value})}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setFormData({...formData, issue_date: v, expiry_date: calcExpiryDate(v)});
+                }}
+                max={new Date().toISOString().slice(0, 10)}
                 className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                required
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">有效期限</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">截止日期（系統自動計算）</label>
               <input
                 type="date"
-                value={formData.valid_until || ''}
-                onChange={(e) => setFormData({...formData, valid_until: e.target.value})}
-                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                value={String(formData.expiry_date || calcExpiryDate(String(formData.issue_date || '')) || '')}
+                readOnly
+                className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-apple-sm text-gray-500 cursor-not-allowed"
               />
             </div>
+          </div>
+
+          <div className="bg-white/50 border border-gray-200/50 rounded-apple-sm p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-sm font-semibold text-gray-800">配額明細</div>
+              <button
+                type="button"
+                onClick={() => setQuotaDetails(prev => [...prev, emptyQuotaRow()])}
+                className="px-3 py-1.5 bg-apple-blue text-white rounded-apple-sm text-sm hover:bg-blue-600 transition-colors"
+              >
+                新增配額
+              </button>
+            </div>
+            <div className="space-y-3">
+              {quotaDetails.map((row, idx) => (
+                <div key={idx} className="border border-gray-200 rounded-apple-sm p-3 bg-white">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">配額序號 *</label>
+                      <input
+                        type="text"
+                        value={row.quota_seq}
+                        onChange={(e) => {
+                          const v = e.target.value.replace(/[^\d]/g, '').slice(0, 4);
+                          setQuotaDetails(prev => prev.map((r, i) => (i === idx ? { ...r, quota_seq: v } : r)));
+                        }}
+                        onBlur={() => {
+                          setQuotaDetails(prev => prev.map((r, i) => (i === idx ? { ...r, quota_seq: r.quota_seq ? r.quota_seq.padStart(4, '0') : '' } : r)));
+                        }}
+                        placeholder="0001"
+                        className="w-full px-3 py-2 border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">工作地點 *</label>
+                      <input
+                        type="text"
+                        maxLength={200}
+                        value={row.work_location}
+                        onChange={(e) => setQuotaDetails(prev => prev.map((r, i) => (i === idx ? { ...r, work_location: e.target.value } : r)))}
+                        className="w-full px-3 py-2 border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">職位名稱 *</label>
+                      <input
+                        type="text"
+                        maxLength={100}
+                        value={row.job_title}
+                        onChange={(e) => setQuotaDetails(prev => prev.map((r, i) => (i === idx ? { ...r, job_title: e.target.value } : r)))}
+                        className="w-full px-3 py-2 border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">每月工資 *</label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={row.monthly_salary}
+                        onChange={(e) => {
+                          const v = formatSalary(e.target.value);
+                          setQuotaDetails(prev => prev.map((r, i) => (i === idx ? { ...r, monthly_salary: v } : r)));
+                        }}
+                        placeholder="0"
+                        className="w-full px-3 py-2 border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50"
+                        required
+                      />
+                      {row.monthly_salary && <div className="text-xs text-gray-500 mt-1">格式化：{prettySalary(row.monthly_salary)}</div>}
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">工作時間 *</label>
+                      <input
+                        type="text"
+                        maxLength={100}
+                        value={row.work_hours}
+                        onChange={(e) => setQuotaDetails(prev => prev.map((r, i) => (i === idx ? { ...r, work_hours: e.target.value } : r)))}
+                        placeholder="每週 X 天，每天 Y 小時"
+                        className="w-full px-3 py-2 border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">僱用期（月）*</label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={row.employment_months}
+                        onChange={(e) => setQuotaDetails(prev => prev.map((r, i) => (i === idx ? { ...r, employment_months: e.target.value.replace(/[^\d]/g, '').slice(0, 3) } : r)))}
+                        className="w-full px-3 py-2 border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50"
+                        required
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end mt-3">
+                    <button
+                      type="button"
+                      onClick={() => setQuotaDeleteTarget(idx)}
+                      className="px-3 py-1.5 text-red-600 bg-red-50 hover:bg-red-100 rounded-apple-sm text-sm"
+                    >
+                      刪除
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="text-xs text-gray-500 mt-3">支援「新增配額」、刪除與暫存（未儲存前可持續編輯）。</div>
           </div>
 
           <div className="pt-4 flex justify-end space-x-3 border-t border-gray-100 mt-6">
