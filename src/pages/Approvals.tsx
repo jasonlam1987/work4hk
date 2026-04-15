@@ -520,7 +520,8 @@ const Approvals: React.FC = () => {
       approval_number: approvalNo,
     };
 
-    if (formData.department && String(formData.department).trim()) payload.department = String(formData.department).trim();
+    const department = String(formData.department || '').trim() || '勞工處';
+    payload.department = department;
     if (typeof formData.headcount === 'number' && formData.headcount > 0) payload.headcount = formData.headcount;
     if (formData.signatory_name && String(formData.signatory_name).trim()) payload.signatory_name = String(formData.signatory_name).trim();
     if (formData.issue_date && String(formData.issue_date).trim()) payload.issue_date = toApiDate(String(formData.issue_date));
