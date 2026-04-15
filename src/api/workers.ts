@@ -8,7 +8,7 @@ export interface Worker {
   approval_number?: string;
   position_id?: number;
   position_name?: string;
-  labour_status?: '在職' | '離職' | '待處理' | string;
+  labour_status?: '辦證中' | '在職' | '離職' | string;
   labour_name?: string;
   id_card_number?: string;
   pinyin_name?: string;

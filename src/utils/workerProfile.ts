@@ -25,6 +25,20 @@ export type WorkerProfile = {
   entry_refused_reason?: string
   work_experiences?: WorkerWorkExperience[]
   educations?: WorkerEducation[]
+  arrival_date?: string
+  departure_date?: string
+  work_batches?: Array<{
+    id: string
+    employer_id?: number
+    employer_name?: string
+    approval_id?: number
+    approval_number?: string
+    status: '辦證中' | '在職' | '離職'
+    start_date?: string
+    departure_date?: string
+    employment_term_months?: number
+    expires_at?: string
+  }>
   files?: {
     id_docs?: Array<{ uid: string; original_name: string; size: number; mime_type: string }>
     education_docs?: Array<{ uid: string; original_name: string; size: number; mime_type: string }>

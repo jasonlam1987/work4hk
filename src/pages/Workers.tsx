@@ -40,11 +40,19 @@ const emptyFiles = () => ({ id_docs: [], education_docs: [], work_docs: [] });
 const initialForm: WorkerCreate = {
   labour_name: '',
   id_card_number: '',
-  labour_status: '在職',
+  labour_status: '辦證中',
   contract_salary: '',
   employment_term: '',
   employer_id: undefined,
   approval_id: undefined,
+};
+
+const addMonths = (dateStr: string, months: number) => {
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return '';
+  const next = new Date(d);
+  next.setMonth(next.getMonth() + months);
+  return next.toISOString().slice(0, 10);
 };
 
 const Workers: React.FC = () => {
@@ -361,7 +369,7 @@ const Workers: React.FC = () => {
   };
 
   const handleOpenCreate = () => {
-    setFormData(initialForm);
+    setFormData({ ...initialForm, labour_status: '辦證中' });
     setEmployerQuery('');
     setApprovalQuery('');
     setEmployerDropdownOpen(false);
@@ -373,6 +381,9 @@ const Workers: React.FC = () => {
       marital_status: 'single',
       phone_code: '+852',
       phone_number: '',
+      arrival_date: '',
+      departure_date: '',
+      work_batches: [],
       files: emptyFiles(),
     });
     setIsEditing(false);
@@ -423,6 +434,9 @@ const Workers: React.FC = () => {
           ? p.educations
           : [emptyEducation()],
       files: p.files || emptyFiles(),
+      arrival_date: (worker as any).arrival_date ?? p.arrival_date ?? '',
+      departure_date: (worker as any).departure_date ?? p.departure_date ?? '',
+      work_batches: Array.isArray(p.work_batches) ? p.work_batches : [],
     };
     setProfile(merged);
 
@@ -485,7 +499,7 @@ const Workers: React.FC = () => {
     const minimal: WorkerCreate = {
       labour_name: labourName,
       id_card_number: idCard,
-      labour_status: labourStatusToApi(String(formData.labour_status || '在職')),
+      labour_status: labourStatusToApi(String(formData.labour_status || '辦證中')),
       contract_salary: String(formData.contract_salary || '').trim(),
       employment_term: formatEmploymentMonths(formData.employment_term),
       employer_id: employerId,
@@ -519,6 +533,19 @@ const Workers: React.FC = () => {
       alert('請選擇批文');
       return;
     }
+    const uiStatus = String(formData.labour_status || '辦證中');
+    if (!isEditing && uiStatus !== '辦證中') {
+      alert('首次錄入資料，勞工狀態只能為「辦證中」');
+      return;
+    }
+    if (uiStatus === '在職' && !String(profile.arrival_date || '').trim()) {
+      alert('狀態為「在職」時，必須輸入赴港日期');
+      return;
+    }
+    if (uiStatus === '離職' && !String(profile.departure_date || '').trim()) {
+      alert('狀態為「離職」時，必須輸入離港日期');
+      return;
+    }
     const phoneCode = String(profile.phone_code || '+852') as '+86' | '+852' | '+853';
     const phoneNumber = String(profile.phone_number || '').trim();
     if (phoneNumber && !isPhoneNumber(phoneNumber)) {
@@ -541,12 +568,40 @@ const Workers: React.FC = () => {
         contact_phone: mergePhone(phoneCode, phoneNumber) || undefined,
         phone_code: phoneCode,
         phone_number: phoneNumber || undefined,
+        arrival_date: profile.arrival_date ? normalizeDate(profile.arrival_date) : undefined,
+        departure_date: profile.departure_date ? normalizeDate(profile.departure_date) : undefined,
       };
+      const months = Number(parseEmploymentMonths(formData.employment_term));
+      const startDate = persistedProfile.arrival_date || '';
+      const expiresAt = uiStatus === '在職' && startDate && months > 0 ? addMonths(startDate, months) : '';
+      const employerName = employers.find(e => e.id === employerId)?.name || employerQuery || '';
+      const currentBatchId =
+        `${String(employerId || '')}|${String(approvalId || persistedProfile.approval_id || '')}|${startDate}|${uiStatus}`;
+      const prevBatches = Array.isArray(persistedProfile.work_batches) ? persistedProfile.work_batches : [];
+      const nextBatch =
+        uiStatus === '在職' || uiStatus === '離職'
+          ? {
+              id: currentBatchId,
+              employer_id: employerId,
+              employer_name: employerName,
+              approval_id: approvalId || persistedProfile.approval_id,
+              approval_number: String(profile.approval_number || '').trim() || persistedProfile.approval_number,
+              status: uiStatus as any,
+              start_date: startDate || undefined,
+              departure_date: uiStatus === '離職' ? persistedProfile.departure_date : undefined,
+              employment_term_months: months > 0 ? months : undefined,
+              expires_at: expiresAt || undefined,
+            }
+          : null;
+      const dedupedBatches = nextBatch
+        ? [nextBatch, ...prevBatches.filter(b => b?.id !== nextBatch.id)]
+        : prevBatches;
+      persistedProfile.work_batches = dedupedBatches;
       const fullPayload: WorkerCreate = {
         ...formData,
         labour_name: labourName,
         id_card_number: idCard,
-        labour_status: labourStatusToApi(String(formData.labour_status || '在職')),
+        labour_status: labourStatusToApi(uiStatus),
         employer_id: employerId,
         approval_id: approvalId,
         approval_number: String(profile.approval_number || '').trim() || undefined,
@@ -557,6 +612,9 @@ const Workers: React.FC = () => {
         marital_status: profile.marital_status,
         contract_salary: String(formData.contract_salary || '').trim() || undefined,
         employment_term: formatEmploymentMonths(formData.employment_term) || undefined,
+        arrival_date: persistedProfile.arrival_date,
+        departure_date: persistedProfile.departure_date,
+        employment_expires_at: expiresAt || undefined,
         entry_refused: Boolean(profile.entry_refused),
         entry_refused_date: profile.entry_refused_date ? normalizeDate(profile.entry_refused_date) : undefined,
         entry_refused_reason: String(profile.entry_refused_reason || '').trim() || undefined,
@@ -718,7 +776,11 @@ const Workers: React.FC = () => {
                         <span
                           className={clsx(
                             'px-2.5 py-1 inline-flex text-xs leading-5 font-medium rounded-full',
-                            labourStatusToUi(worker.labour_status) === '在職' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
+                            labourStatusToUi(worker.labour_status) === '在職'
+                              ? 'bg-green-100 text-green-800'
+                              : labourStatusToUi(worker.labour_status) === '辦證中'
+                                ? 'bg-yellow-100 text-yellow-800'
+                                : 'bg-gray-100 text-gray-800'
                           )}
                         >
                           {labourStatusToUi(worker.labour_status)}
@@ -858,12 +920,48 @@ const Workers: React.FC = () => {
                 value={formData.labour_status}
                 onChange={(e) => setFormData({ ...formData, labour_status: e.target.value })}
                 className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                disabled={!isEditing}
               >
                 {labourStatusOptions.map(s => (
                   <option key={s} value={s}>{s}</option>
                 ))}
               </select>
+              {!isEditing && (
+                <p className="text-xs text-gray-500 mt-1 ml-1">首次錄入固定為「辦證中」</p>
+              )}
             </div>
+
+            {String(formData.labour_status || '辦證中') === '在職' && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">赴港日期 *</label>
+                <input
+                  type="date"
+                  value={normalizeDate(profile.arrival_date || '')}
+                  onChange={(e) => setProfile(prev => ({ ...prev, arrival_date: e.target.value }))}
+                  className={clsx(
+                    'w-full px-4 py-2 bg-white border rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all',
+                    !String(profile.arrival_date || '').trim() ? 'border-red-300' : 'border-gray-200'
+                  )}
+                  required
+                />
+              </div>
+            )}
+
+            {String(formData.labour_status || '辦證中') === '離職' && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">離港日期 *</label>
+                <input
+                  type="date"
+                  value={normalizeDate(profile.departure_date || '')}
+                  onChange={(e) => setProfile(prev => ({ ...prev, departure_date: e.target.value }))}
+                  className={clsx(
+                    'w-full px-4 py-2 bg-white border rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all',
+                    !String(profile.departure_date || '').trim() ? 'border-red-300' : 'border-gray-200'
+                  )}
+                  required
+                />
+              </div>
+            )}
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">居住地址</label>
@@ -1261,6 +1359,33 @@ const Workers: React.FC = () => {
               </div>
             )}
           </div>
+
+          {isEditing && (
+            <div className="bg-white/50 border border-gray-200/50 rounded-apple-sm p-4">
+              <div className="flex items-center gap-2 text-sm font-medium text-gray-800 mb-3">
+                <Briefcase className="w-4 h-4 text-gray-500" />
+                <span>在港工作歷程</span>
+              </div>
+              {(profile.work_batches || []).length === 0 ? (
+                <div className="text-sm text-gray-500 bg-gray-50 border border-dashed border-gray-200 rounded-apple-sm p-3">
+                  尚未產生歷程記錄。當狀態切換為「在職／離職」並儲存後，系統會自動追加批次資料。
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {(profile.work_batches || []).map((b) => (
+                    <div key={b.id} className="rounded-apple-sm border border-gray-200 bg-white p-3">
+                      <div className="text-sm font-medium text-gray-900">
+                        {b.employer_name || '未指定僱主'} · {b.approval_number || '未指定批文'} · {b.status}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        開始：{b.start_date || '-'} ｜ 離港：{b.departure_date || '-'} ｜ 期限：{b.employment_term_months ? `${b.employment_term_months}個月` : '-'} ｜ 到期：{b.expires_at || '-'}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="bg-blue-50/60 border border-blue-100 rounded-apple-sm p-4">
             <div className="flex items-center gap-2 text-sm font-medium text-blue-800">

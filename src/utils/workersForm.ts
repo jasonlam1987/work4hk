@@ -11,18 +11,20 @@ export const isMainlandId = (v: string) => /^\d{17}[\dXx]$/.test(v.trim());
 
 export const isPhoneNumber = (v: string) => /^\d{7,11}$/.test(v);
 
-export const labourStatusOptions = ['在職', '離職', '待處理'] as const;
+export const labourStatusOptions = ['辦證中', '在職', '離職'] as const;
 
 export const labourStatusToApi = (v?: string) => {
+  if (v === '辦證中' || v === 'Pending') return 'Pending';
   if (v === '在職' || v === 'Active') return 'Active';
   if (v === '離職' || v === 'Inactive') return 'Inactive';
   return 'Pending';
 };
 
 export const labourStatusToUi = (v?: string) => {
+  if (v === 'Pending' || v === '辦證中') return '辦證中';
   if (v === 'Active' || v === '在職') return '在職';
   if (v === 'Inactive' || v === '離職') return '離職';
-  return '待處理';
+  return '辦證中';
 };
 
 export const mergePhone = (code: PhoneCode, number: string) => {

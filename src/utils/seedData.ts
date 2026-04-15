@@ -97,7 +97,7 @@ export const seedMockData = async () => {
       id_card_number: 'C9876543', 
       employer_id: e2.id, 
       position_id: p2.id, 
-      labour_status: '待處理', 
+      labour_status: '辦證中', 
       contract_salary: '12000', 
       employment_term: '12个月'
     });

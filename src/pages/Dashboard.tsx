@@ -5,11 +5,13 @@ import { getUsers } from '../api/users';
 import { getEmployers } from '../api/employers';
 import { getWorkers } from '../api/workers';
 import { getApprovals, Approval } from '../api/approvals';
+import { parseEmploymentMonths } from '../utils/workersForm';
 
 const Dashboard: React.FC = () => {
   const user = useAuthStore((state) => state.user);
   const [loading, setLoading] = useState(() => !sessionStorage.getItem('dashboardStats'));
   const [warnings, setWarnings] = useState<Approval[]>([]);
+  const [workerRenewWarnings, setWorkerRenewWarnings] = useState<Array<{ id: number; name: string; daysLeft: number; expiresAt: string }>>([]);
   const [counts, setCounts] = useState(() => {
     const cached = sessionStorage.getItem('dashboardStats');
     return cached ? JSON.parse(cached) : {
@@ -48,11 +50,47 @@ const Dashboard: React.FC = () => {
 
         getWorkers().then(res => {
           if (isMounted) {
+            const workers = res || [];
             setCounts(prev => {
-              const next = { ...prev, workers: res?.length || 0 };
+              const next = { ...prev, workers: workers.length || 0 };
               sessionStorage.setItem('dashboardStats', JSON.stringify(next));
               return next;
             });
+
+            // 勞工續期提醒：到期前 9 個月開始提醒
+            try {
+              const raw = localStorage.getItem('worker_profiles_v1');
+              const profiles = raw ? JSON.parse(raw) : {};
+              const today = new Date();
+              const remindDays = 9 * 30;
+
+              const reminders = workers
+                .map((w: any) => {
+                  const p = profiles?.[String(w.id)] || {};
+                  const statusUi = w?.labour_status === 'Active' ? '在職' : w?.labour_status === 'Inactive' ? '離職' : w?.labour_status === 'Pending' ? '辦證中' : w?.labour_status;
+                  if (statusUi !== '在職') return null;
+                  const start = String(p?.arrival_date || '').trim();
+                  const months = Number(parseEmploymentMonths(w?.employment_term || p?.employment_term_months || ''));
+                  if (!start || !months) return null;
+                  const d = new Date(start);
+                  if (Number.isNaN(d.getTime())) return null;
+                  d.setMonth(d.getMonth() + months);
+                  const ms = d.getTime() - today.getTime();
+                  const daysLeft = Math.ceil(ms / (1000 * 60 * 60 * 24));
+                  if (daysLeft < 0 || daysLeft > remindDays) return null;
+                  return {
+                    id: Number(w.id),
+                    name: String(w.labour_name || '未命名'),
+                    daysLeft,
+                    expiresAt: d.toISOString().slice(0, 10),
+                  };
+                })
+                .filter(Boolean) as Array<{ id: number; name: string; daysLeft: number; expiresAt: string }>;
+
+              setWorkerRenewWarnings(reminders.sort((a, b) => a.daysLeft - b.daysLeft));
+            } catch {
+              setWorkerRenewWarnings([]);
+            }
           }
         }).catch(console.error);
 
@@ -140,14 +178,32 @@ const Dashboard: React.FC = () => {
       <div className="bg-white rounded-apple-sm p-6 shadow-sm border border-gray-100 mt-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
           <AlertCircle className="w-5 h-5 mr-2 text-orange-500" />
-          近期警告與提醒 (30天內到期)
+          近期警告與提醒
         </h2>
         {loading ? (
           <div className="flex justify-center py-8">
             <Loader2 className="w-6 h-6 animate-spin text-apple-blue" />
           </div>
-        ) : warnings.length > 0 ? (
+        ) : (warnings.length > 0 || workerRenewWarnings.length > 0) ? (
           <div className="space-y-3">
+            {workerRenewWarnings.map((w) => (
+              <div key={`w-${w.id}`} className="flex items-center justify-between p-4 bg-blue-50/50 border border-blue-100 rounded-apple-sm">
+                <div className="flex items-center space-x-3">
+                  <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">
+                      勞工續期提示：{w.name}
+                    </p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      餘下 {w.daysLeft} 天到期
+                    </p>
+                  </div>
+                </div>
+                <div className="text-sm font-medium text-blue-600">
+                  到期日：{w.expiresAt}
+                </div>
+              </div>
+            ))}
             {warnings.map((warning) => (
               <div key={warning.id} className="flex items-center justify-between p-4 bg-orange-50/50 border border-orange-100 rounded-apple-sm">
                 <div className="flex items-center space-x-3">
@@ -169,7 +225,7 @@ const Dashboard: React.FC = () => {
           </div>
         ) : (
           <div className="text-center py-8 text-gray-500 bg-gray-50 rounded-apple-sm border border-dashed border-gray-200">
-            目前沒有即將到期的批文或警告事項。
+            目前沒有即將到期的批文或勞工續期提醒。
           </div>
         )}
       </div>

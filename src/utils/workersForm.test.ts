@@ -31,14 +31,16 @@ describe('workersForm utils', () => {
   });
 
   it('maps labour status ui/api', () => {
+    expect(labourStatusToApi('辦證中')).toBe('Pending');
     expect(labourStatusToApi('在職')).toBe('Active');
     expect(labourStatusToApi('離職')).toBe('Inactive');
-    expect(labourStatusToApi('待處理')).toBe('Pending');
+    expect(labourStatusToApi('Pending')).toBe('Pending');
+    expect(labourStatusToUi('Pending')).toBe('辦證中');
     expect(labourStatusToUi('Active')).toBe('在職');
     expect(labourStatusToUi('Inactive')).toBe('離職');
-    expect(labourStatusToUi('Pending')).toBe('待處理');
+    expect(labourStatusToUi('辦證中')).toBe('辦證中');
     expect(labourStatusToApi('未知')).toBe('Pending');
-    expect(labourStatusToUi('未知')).toBe('待處理');
+    expect(labourStatusToUi('未知')).toBe('辦證中');
   });
 
   it('merges phone', () => {
