@@ -1,33 +1,32 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Search, Edit2, Loader2, RefreshCw, Briefcase, GraduationCap, Link2, Phone, Home, Mail } from 'lucide-react';
+import { Plus, Search, Edit2, Loader2, RefreshCw, Briefcase, GraduationCap, Link2, Phone, Home, Mail, FileUp, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import Modal from '../components/Modal';
 import { Worker, WorkerCreate, createWorker, getWorkers, updateWorker } from '../api/workers';
 import { Employer, getEmployers } from '../api/employers';
 import { Approval, getApprovals } from '../api/approvals';
 import { WorkerEducation, WorkerProfile, WorkerWorkExperience, getWorkerProfile, setWorkerProfile } from '../utils/workerProfile';
+import { WorkerFileCategory, WorkerFileMeta, deleteWorkerFile, uploadWorkerFile } from '../api/workerFiles';
+import { PHONE_CODES, labourStatusOptions, labourStatusToApi, labourStatusToUi, normalizeDate, isMainlandId, isPhoneNumber, mergePhone } from '../utils/workersForm';
 
 const WORKERS_CACHE_KEY = 'cache_workers_list_v1';
 const EMPLOYERS_CACHE_KEY = 'cache_employers_list_v1';
 const APPROVALS_CACHE_KEY = 'cache_approvals_list_v1';
+const MAX_FILES_PER_CATEGORY = 10;
+const MAX_FILE_SIZE = 5 * 1024 * 1024;
+const ACCEPT_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png']);
 
-const normalizeDate = (v: string) => {
-  const s = String(v || '').trim();
-  if (/^\d{4}\/\d{2}\/\d{2}$/.test(s)) return s.replace(/\//g, '-');
-  return s;
-};
-
-const isMainlandId = (v: string) => /^\d{17}[\dXx]$/.test(v.trim());
+type FileTab = WorkerFileCategory;
 
 const emptyExperience = (): WorkerWorkExperience => ({ company_name: '', start_date: '', end_date: '' });
 const emptyEducation = (): WorkerEducation => ({ school_name: '', start_date: '', graduation_date: '' });
+const emptyFiles = () => ({ id_docs: [], education_docs: [], work_docs: [] });
 
 const initialForm: WorkerCreate = {
   labour_name: '',
   id_card_number: '',
-  labour_status: 'Active',
-  application_status: 'Pending',
-  contract_salary: 0,
+  labour_status: '在職',
+  contract_salary: '',
   employment_term: '',
   employer_id: undefined,
   approval_id: undefined,
@@ -54,7 +53,12 @@ const Workers: React.FC = () => {
     educations: [emptyEducation()],
     entry_refused: false,
     marital_status: 'single',
+    phone_code: '+852',
+    phone_number: '',
+    files: emptyFiles(),
   });
+  const [activeFileTab, setActiveFileTab] = useState<FileTab>('id_docs');
+  const [uploadingCategory, setUploadingCategory] = useState<FileTab | null>(null);
 
   const [employerQuery, setEmployerQuery] = useState('');
   const [approvalQuery, setApprovalQuery] = useState('');
@@ -62,6 +66,7 @@ const Workers: React.FC = () => {
   const [approvalDropdownOpen, setApprovalDropdownOpen] = useState(false);
   const employerBlurTimer = useRef<number | null>(null);
   const approvalBlurTimer = useRef<number | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const employerId = Number((formData as any).employer_id || 0) || undefined;
   const approvalId = Number((formData as any).approval_id || profile.approval_id || 0) || undefined;
@@ -216,6 +221,98 @@ const Workers: React.FC = () => {
     }));
   };
 
+  const toBase64DataUrl = (file: File) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(new Error('read file failed'));
+      reader.readAsDataURL(file);
+    });
+
+  const handleChooseCategory = (category: FileTab) => {
+    setActiveFileTab(category);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+      fileInputRef.current.click();
+    }
+  };
+
+  const categoryLabel = (c: FileTab) => {
+    if (c === 'id_docs') return '證件資料';
+    if (c === 'education_docs') return '學歷證明';
+    return '工作證明';
+  };
+
+  const handleFileSelected = async (evt: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(evt.target.files || []);
+    if (files.length === 0) return;
+    const category = activeFileTab;
+    const existing = profile.files?.[category] || [];
+    if (existing.length + files.length > MAX_FILES_PER_CATEGORY) {
+      alert(`每個分類最多上傳 ${MAX_FILES_PER_CATEGORY} 個檔案`);
+      return;
+    }
+
+    for (const f of files) {
+      if (!ACCEPT_TYPES.has(f.type)) {
+        alert(`檔案類型不支援：${f.name}（只允許 pdf/jpg/png）`);
+        return;
+      }
+      if (f.size > MAX_FILE_SIZE) {
+        alert(`檔案超過 5MB：${f.name}`);
+        return;
+      }
+    }
+
+    setUploadingCategory(category);
+    try {
+      const uploaded: WorkerFileMeta[] = [];
+      for (const f of files) {
+        const dataUrl = await toBase64DataUrl(f);
+        const saved = await uploadWorkerFile({
+          category,
+          file_name: f.name,
+          mime_type: f.type,
+          data_url: dataUrl,
+        });
+        uploaded.push(saved);
+      }
+
+      setProfile(prev => {
+        const cur = prev.files || emptyFiles();
+        return {
+          ...prev,
+          files: {
+            ...cur,
+            [category]: [...(cur[category] || []), ...uploaded],
+          },
+        };
+      });
+    } catch (err: any) {
+      alert(`檔案上傳失敗：${err?.response?.data?.error || err?.message || '未知錯誤'}`);
+    } finally {
+      setUploadingCategory(null);
+    }
+  };
+
+  const handleDeleteFile = async (category: FileTab, uid: string) => {
+    try {
+      await deleteWorkerFile(uid);
+    } catch {
+    } finally {
+      setProfile(prev => {
+        const cur = prev.files || emptyFiles();
+        return {
+          ...prev,
+          files: {
+            ...cur,
+            [category]: (cur[category] || []).filter(x => x.uid !== uid),
+          },
+        };
+      });
+    }
+  };
+
   const handleOpenCreate = () => {
     setFormData(initialForm);
     setEmployerQuery('');
@@ -227,6 +324,9 @@ const Workers: React.FC = () => {
       educations: [emptyEducation()],
       entry_refused: false,
       marital_status: 'single',
+      phone_code: '+852',
+      phone_number: '',
+      files: emptyFiles(),
     });
     setIsEditing(false);
     setSelectedId(null);
@@ -237,20 +337,28 @@ const Workers: React.FC = () => {
     setFormData({
       labour_name: worker.labour_name || '',
       id_card_number: worker.id_card_number || '',
-      labour_status: worker.labour_status || 'Active',
-      application_status: worker.application_status || 'Pending',
-      contract_salary: worker.contract_salary || 0,
+      labour_status: labourStatusToUi(worker.labour_status),
+      contract_salary: worker.contract_salary || '',
       employment_term: worker.employment_term || '',
       employer_id: worker.employer_id,
       approval_id: (worker as any).approval_id,
     });
 
     const p = getWorkerProfile(worker.id);
+    const rawContact = String((worker as any).contact_phone ?? p.contact_phone ?? '').trim();
+    const inferredCode =
+      rawContact.startsWith('+86') ? '+86'
+        : rawContact.startsWith('+853') ? '+853'
+          : rawContact.startsWith('+852') ? '+852'
+            : '+852';
+    const inferredNumber = rawContact.replace(/^\+\d{2,3}/, '').trim();
     const merged: WorkerProfile = {
       approval_id: (worker as any).approval_id ?? p.approval_id,
       approval_number: (worker as any).approval_number ?? p.approval_number,
       pinyin_name: (worker as any).pinyin_name ?? p.pinyin_name,
       contact_phone: (worker as any).contact_phone ?? p.contact_phone,
+      phone_code: (p.phone_code as any) || inferredCode,
+      phone_number: p.phone_number || inferredNumber,
       residential_address: (worker as any).residential_address ?? p.residential_address,
       mailing_address: (worker as any).mailing_address ?? p.mailing_address,
       marital_status: ((worker as any).marital_status ?? p.marital_status ?? 'single') as any,
@@ -267,6 +375,7 @@ const Workers: React.FC = () => {
         : Array.isArray(p.educations)
           ? p.educations
           : [emptyEducation()],
+      files: p.files || emptyFiles(),
     };
     setProfile(merged);
 
@@ -305,9 +414,8 @@ const Workers: React.FC = () => {
     const minimal: WorkerCreate = {
       labour_name: labourName,
       id_card_number: idCard,
-      labour_status: formData.labour_status,
-      application_status: formData.application_status,
-      contract_salary: formData.contract_salary,
+      labour_status: labourStatusToApi(String(formData.labour_status || '在職')),
+      contract_salary: String(formData.contract_salary || '').trim(),
       employment_term: formData.employment_term,
       employer_id: employerId,
     };
@@ -340,6 +448,12 @@ const Workers: React.FC = () => {
       alert('請選擇批文');
       return;
     }
+    const phoneCode = String(profile.phone_code || '+852') as '+86' | '+852' | '+853';
+    const phoneNumber = String(profile.phone_number || '').trim();
+    if (phoneNumber && !isPhoneNumber(phoneNumber)) {
+      alert('電話號碼格式錯誤：請輸入 7-11 位數字');
+      return;
+    }
     if (profile.entry_refused) {
       const d = String(profile.entry_refused_date || '').trim();
       const r = String(profile.entry_refused_reason || '').trim();
@@ -351,21 +465,34 @@ const Workers: React.FC = () => {
 
     setSaving(true);
     try {
+      const persistedProfile: WorkerProfile = {
+        ...profile,
+        contact_phone: mergePhone(phoneCode, phoneNumber) || undefined,
+        phone_code: phoneCode,
+        phone_number: phoneNumber || undefined,
+      };
       const fullPayload: WorkerCreate = {
         ...formData,
         labour_name: labourName,
         id_card_number: idCard,
+        labour_status: labourStatusToApi(String(formData.labour_status || '在職')),
         employer_id: employerId,
         approval_id: approvalId,
         approval_number: String(profile.approval_number || '').trim() || undefined,
         pinyin_name: String(profile.pinyin_name || '').trim() || undefined,
-        contact_phone: String(profile.contact_phone || '').trim() || undefined,
+        contact_phone: mergePhone(phoneCode, phoneNumber) || undefined,
         residential_address: String(profile.residential_address || '').trim() || undefined,
         mailing_address: String(profile.mailing_address || '').trim() || undefined,
         marital_status: profile.marital_status,
+        contract_salary: String(formData.contract_salary || '').trim() || undefined,
         entry_refused: Boolean(profile.entry_refused),
         entry_refused_date: profile.entry_refused_date ? normalizeDate(profile.entry_refused_date) : undefined,
         entry_refused_reason: String(profile.entry_refused_reason || '').trim() || undefined,
+        file_uids: {
+          id_docs: (profile.files?.id_docs || []).map(x => x.uid),
+          education_docs: (profile.files?.education_docs || []).map(x => x.uid),
+          work_docs: (profile.files?.work_docs || []).map(x => x.uid),
+        },
         work_experiences: Array.isArray(profile.work_experiences)
           ? profile.work_experiences
               .map(x => ({
@@ -399,17 +526,17 @@ const Workers: React.FC = () => {
             throw err;
           }
         }
-        setWorkerProfile(selectedId, profile);
+        setWorkerProfile(selectedId, persistedProfile);
       } else {
         try {
           const created = await createWorker(fullPayload);
-          if (created?.id) setWorkerProfile(Number(created.id), profile);
+          if (created?.id) setWorkerProfile(Number(created.id), persistedProfile);
         } catch (err: any) {
           const status = err?.response?.status as number | undefined;
           const text = JSON.stringify(err?.response?.data || {}).toLowerCase();
           if (status === 422 && (text.includes('extra') || text.includes('not permitted') || text.includes('unexpected'))) {
             const created = await retryWithoutExtras(null, labourName, idCard);
-            if ((created as any)?.id) setWorkerProfile(Number((created as any).id), profile);
+            if ((created as any)?.id) setWorkerProfile(Number((created as any).id), persistedProfile);
             alert('後端暫未支援部分擴展欄位；已改為只保存核心資料，其他欄位將保存在本機。');
           } else {
             throw err;
@@ -519,10 +646,10 @@ const Workers: React.FC = () => {
                         <span
                           className={clsx(
                             'px-2.5 py-1 inline-flex text-xs leading-5 font-medium rounded-full',
-                            worker.labour_status === 'Active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
+                            labourStatusToUi(worker.labour_status) === '在職' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
                           )}
                         >
-                          {worker.labour_status || '未知'}
+                          {labourStatusToUi(worker.labour_status)}
                         </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
@@ -590,18 +717,38 @@ const Workers: React.FC = () => {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">聯繫電話</label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Phone className="h-4 w-4 text-gray-400" />
+              <div className="flex gap-2">
+                <div className="relative w-28">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <Phone className="h-4 w-4 text-gray-400" />
+                  </div>
+                  <select
+                    value={profile.phone_code || '+852'}
+                    onChange={(e) => setProfile(prev => ({ ...prev, phone_code: e.target.value as any }))}
+                    className="w-full pl-9 pr-2 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                  >
+                    {PHONE_CODES.map(code => (
+                      <option key={code} value={code}>{code}</option>
+                    ))}
+                  </select>
                 </div>
                 <input
                   type="text"
-                  value={profile.contact_phone || ''}
-                  onChange={(e) => setProfile(prev => ({ ...prev, contact_phone: e.target.value }))}
-                  className="w-full pl-10 pr-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
-                  placeholder="例如：+86 13xxxxxxxxx"
+                  value={profile.phone_number || ''}
+                  onChange={(e) => {
+                    const v = e.target.value.replace(/\D/g, '').slice(0, 11);
+                    setProfile(prev => ({ ...prev, phone_number: v }));
+                  }}
+                  className={clsx(
+                    "w-full px-4 py-2 bg-white border rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all",
+                    profile.phone_number && !isPhoneNumber(profile.phone_number) ? 'border-red-300' : 'border-gray-200'
+                  )}
+                  placeholder="電話號碼（7-11位數字）"
                 />
               </div>
+              {profile.phone_number && !isPhoneNumber(profile.phone_number) && (
+                <p className="text-xs text-red-500 mt-1 ml-1">請輸入 7-11 位數字</p>
+              )}
             </div>
 
             <div>
@@ -623,9 +770,9 @@ const Workers: React.FC = () => {
                 onChange={(e) => setFormData({ ...formData, labour_status: e.target.value })}
                 className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
               >
-                <option value="Active">Active (在職)</option>
-                <option value="Inactive">Inactive (離職)</option>
-                <option value="Pending">Pending (待處理)</option>
+                {labourStatusOptions.map(s => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
               </select>
             </div>
 
@@ -782,21 +929,13 @@ const Workers: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">申請狀態</label>
-              <input
-                type="text"
-                value={formData.application_status}
-                onChange={(e) => setFormData({ ...formData, application_status: e.target.value })}
-                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
-              />
-            </div>
-            <div>
               <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">合約薪資</label>
               <input
-                type="number"
+                type="text"
                 value={formData.contract_salary}
-                onChange={(e) => setFormData({ ...formData, contract_salary: Number(e.target.value) })}
+                onChange={(e) => setFormData({ ...formData, contract_salary: e.target.value.replace(/[^\d.]/g, '') })}
                 className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                placeholder="例如：18000"
               />
             </div>
 
@@ -812,7 +951,7 @@ const Workers: React.FC = () => {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="space-y-6">
             <div className="bg-white/50 border border-gray-200/50 rounded-apple-sm p-4">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2 text-sm font-medium text-gray-800">
@@ -823,61 +962,71 @@ const Workers: React.FC = () => {
                   + 新增
                 </button>
               </div>
-              <div className="space-y-3">
+              <div className="space-y-4">
                 {(profile.work_experiences || []).map((x, idx) => (
-                  <div key={idx} className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                    <input
-                      type="text"
-                      value={x.company_name}
-                      onChange={(e) =>
-                        setProfile(prev => {
-                          const next = [...(prev.work_experiences || [])];
-                          next[idx] = { ...next[idx], company_name: e.target.value };
-                          return { ...prev, work_experiences: next };
-                        })
-                      }
-                      className="w-full px-3 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
-                      placeholder="公司名稱"
-                    />
-                    <input
-                      type="date"
-                      value={normalizeDate(x.start_date)}
-                      onChange={(e) =>
-                        setProfile(prev => {
-                          const next = [...(prev.work_experiences || [])];
-                          next[idx] = { ...next[idx], start_date: e.target.value };
-                          return { ...prev, work_experiences: next };
-                        })
-                      }
-                      className="w-full px-3 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
-                    />
-                    <div className="flex gap-2">
+                  <div key={idx} className="rounded-apple-sm border border-gray-200 bg-white p-3">
+                    <div className="grid grid-cols-1 gap-4">
                       <input
-                        type="date"
-                        value={normalizeDate(x.end_date)}
+                        type="text"
+                        value={x.company_name}
                         onChange={(e) =>
                           setProfile(prev => {
                             const next = [...(prev.work_experiences || [])];
-                            next[idx] = { ...next[idx], end_date: e.target.value };
+                            next[idx] = { ...next[idx], company_name: e.target.value };
                             return { ...prev, work_experiences: next };
                           })
                         }
                         className="w-full px-3 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                        placeholder="公司名稱"
                       />
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setProfile(prev => {
-                            const list = [...(prev.work_experiences || [])];
-                            const next = list.filter((_, i) => i !== idx);
-                            return { ...prev, work_experiences: next.length > 0 ? next : [emptyExperience()] };
-                          })
-                        }
-                        className="px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-apple-sm text-sm text-gray-700"
-                        title="刪除"
-                      >
-                        ×
-                      </button>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="min-w-[240px]">
+                          <label className="block text-xs text-gray-500 mb-1">入職時間</label>
+                          <input
+                            type="date"
+                            value={normalizeDate(x.start_date)}
+                            onChange={(e) =>
+                              setProfile(prev => {
+                                const next = [...(prev.work_experiences || [])];
+                                next[idx] = { ...next[idx], start_date: e.target.value };
+                                return { ...prev, work_experiences: next };
+                              })
+                            }
+                            className="w-full px-3 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                          />
+                        </div>
+                        <div className="min-w-[240px]">
+                          <label className="block text-xs text-gray-500 mb-1">離職時間</label>
+                          <div className="flex gap-2">
+                            <input
+                              type="date"
+                              value={normalizeDate(x.end_date)}
+                              onChange={(e) =>
+                                setProfile(prev => {
+                                  const next = [...(prev.work_experiences || [])];
+                                  next[idx] = { ...next[idx], end_date: e.target.value };
+                                  return { ...prev, work_experiences: next };
+                                })
+                              }
+                              className="w-full px-3 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                            />
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setProfile(prev => {
+                                  const list = [...(prev.work_experiences || [])];
+                                  const next = list.filter((_, i) => i !== idx);
+                                  return { ...prev, work_experiences: next.length > 0 ? next : [emptyExperience()] };
+                                })
+                              }
+                              className="px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-apple-sm text-sm text-gray-700"
+                              title="刪除"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -894,61 +1043,71 @@ const Workers: React.FC = () => {
                   + 新增
                 </button>
               </div>
-              <div className="space-y-3">
+              <div className="space-y-4">
                 {(profile.educations || []).map((x, idx) => (
-                  <div key={idx} className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                    <input
-                      type="text"
-                      value={x.school_name}
-                      onChange={(e) =>
-                        setProfile(prev => {
-                          const next = [...(prev.educations || [])];
-                          next[idx] = { ...next[idx], school_name: e.target.value };
-                          return { ...prev, educations: next };
-                        })
-                      }
-                      className="w-full px-3 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
-                      placeholder="學校名稱"
-                    />
-                    <input
-                      type="date"
-                      value={normalizeDate(x.start_date)}
-                      onChange={(e) =>
-                        setProfile(prev => {
-                          const next = [...(prev.educations || [])];
-                          next[idx] = { ...next[idx], start_date: e.target.value };
-                          return { ...prev, educations: next };
-                        })
-                      }
-                      className="w-full px-3 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
-                    />
-                    <div className="flex gap-2">
+                  <div key={idx} className="rounded-apple-sm border border-gray-200 bg-white p-3">
+                    <div className="grid grid-cols-1 gap-4">
                       <input
-                        type="date"
-                        value={normalizeDate(x.graduation_date)}
+                        type="text"
+                        value={x.school_name}
                         onChange={(e) =>
                           setProfile(prev => {
                             const next = [...(prev.educations || [])];
-                            next[idx] = { ...next[idx], graduation_date: e.target.value };
+                            next[idx] = { ...next[idx], school_name: e.target.value };
                             return { ...prev, educations: next };
                           })
                         }
                         className="w-full px-3 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                        placeholder="學校名稱"
                       />
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setProfile(prev => {
-                            const list = [...(prev.educations || [])];
-                            const next = list.filter((_, i) => i !== idx);
-                            return { ...prev, educations: next.length > 0 ? next : [emptyEducation()] };
-                          })
-                        }
-                        className="px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-apple-sm text-sm text-gray-700"
-                        title="刪除"
-                      >
-                        ×
-                      </button>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="min-w-[240px]">
+                          <label className="block text-xs text-gray-500 mb-1">入讀時間</label>
+                          <input
+                            type="date"
+                            value={normalizeDate(x.start_date)}
+                            onChange={(e) =>
+                              setProfile(prev => {
+                                const next = [...(prev.educations || [])];
+                                next[idx] = { ...next[idx], start_date: e.target.value };
+                                return { ...prev, educations: next };
+                              })
+                            }
+                            className="w-full px-3 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                          />
+                        </div>
+                        <div className="min-w-[240px]">
+                          <label className="block text-xs text-gray-500 mb-1">畢業時間</label>
+                          <div className="flex gap-2">
+                            <input
+                              type="date"
+                              value={normalizeDate(x.graduation_date)}
+                              onChange={(e) =>
+                                setProfile(prev => {
+                                  const next = [...(prev.educations || [])];
+                                  next[idx] = { ...next[idx], graduation_date: e.target.value };
+                                  return { ...prev, educations: next };
+                                })
+                              }
+                              className="w-full px-3 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                            />
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setProfile(prev => {
+                                  const list = [...(prev.educations || [])];
+                                  const next = list.filter((_, i) => i !== idx);
+                                  return { ...prev, educations: next.length > 0 ? next : [emptyEducation()] };
+                                })
+                              }
+                              className="px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-apple-sm text-sm text-gray-700"
+                              title="刪除"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -1005,6 +1164,71 @@ const Workers: React.FC = () => {
                 </div>
               </div>
             )}
+          </div>
+
+          <div className="bg-white/50 border border-gray-200/50 rounded-apple-sm p-4 space-y-4">
+            <div className="flex items-center gap-2 text-sm font-medium text-gray-800">
+              <FileUp className="w-4 h-4 text-gray-500" />
+              <span>文件上傳</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {(['id_docs', 'education_docs', 'work_docs'] as FileTab[]).map(c => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => handleChooseCategory(c)}
+                  className={clsx(
+                    'px-3 py-2 rounded-apple-sm text-sm border transition-colors',
+                    activeFileTab === c
+                      ? 'bg-apple-blue text-white border-apple-blue'
+                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                  )}
+                  disabled={uploadingCategory === c}
+                >
+                  {uploadingCategory === c ? '上傳中...' : categoryLabel(c)}
+                </button>
+              ))}
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".pdf,.jpg,.jpeg,.png"
+              className="hidden"
+              onChange={handleFileSelected}
+            />
+            <div className="space-y-3">
+              {(['id_docs', 'education_docs', 'work_docs'] as FileTab[]).map(c => {
+                const files = profile.files?.[c] || [];
+                return (
+                  <div key={c} className="rounded-apple-sm border border-gray-200 bg-white p-3">
+                    <div className="text-sm font-medium text-gray-700 mb-2">{categoryLabel(c)}</div>
+                    {files.length === 0 ? (
+                      <div className="text-xs text-gray-500">未上傳檔案</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {files.map(f => (
+                          <div key={f.uid} className="flex items-center justify-between gap-3 text-sm">
+                            <div className="min-w-0">
+                              <div className="truncate text-gray-800">{f.original_name}</div>
+                              <div className="text-xs text-gray-500">{(f.size / 1024).toFixed(1)} KB</div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteFile(c, f.uid)}
+                              className="inline-flex items-center gap-1 px-2 py-1 text-xs text-red-600 bg-red-50 hover:bg-red-100 rounded"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              <span>刪除</span>
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
           <div className="pt-4 flex justify-end space-x-3 border-t border-gray-100 mt-6">

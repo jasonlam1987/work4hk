@@ -14,6 +14,8 @@ export type WorkerProfile = {
   approval_id?: number
   approval_number?: string
   pinyin_name?: string
+  phone_code?: '+86' | '+852' | '+853'
+  phone_number?: string
   contact_phone?: string
   residential_address?: string
   mailing_address?: string
@@ -23,6 +25,11 @@ export type WorkerProfile = {
   entry_refused_reason?: string
   work_experiences?: WorkerWorkExperience[]
   educations?: WorkerEducation[]
+  files?: {
+    id_docs?: Array<{ uid: string; original_name: string; size: number; mime_type: string }>
+    education_docs?: Array<{ uid: string; original_name: string; size: number; mime_type: string }>
+    work_docs?: Array<{ uid: string; original_name: string; size: number; mime_type: string }>
+  }
 }
 
 const STORAGE_KEY = 'worker_profiles_v1'

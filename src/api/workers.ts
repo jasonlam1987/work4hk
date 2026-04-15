@@ -8,8 +8,7 @@ export interface Worker {
   approval_number?: string;
   position_id?: number;
   position_name?: string;
-  labour_status?: string;
-  application_status?: string;
+  labour_status?: '在職' | '離職' | '待處理' | string;
   labour_name?: string;
   id_card_number?: string;
   pinyin_name?: string;
@@ -22,7 +21,7 @@ export interface Worker {
   entry_refused_reason?: string;
   work_experiences?: any;
   educations?: any;
-  contract_salary?: number;
+  contract_salary?: string | number;
   employment_term?: string;
   [key: string]: any;
 }

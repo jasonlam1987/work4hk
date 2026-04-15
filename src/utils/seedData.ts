@@ -77,10 +77,9 @@ export const seedMockData = async () => {
       id_card_number: 'A1234567', 
       employer_id: e1.id, 
       position_id: p1.id, 
-      labour_status: 'Active', 
-      contract_salary: 15000, 
-      employment_term: '24个月',
-      application_status: 'Pending'
+      labour_status: '在職', 
+      contract_salary: '15000', 
+      employment_term: '24个月'
     });
 
     await createWorker({ 
@@ -88,10 +87,9 @@ export const seedMockData = async () => {
       id_card_number: 'B7654321', 
       employer_id: e2.id, 
       position_id: p2.id, 
-      labour_status: 'Active', 
-      contract_salary: 12000, 
-      employment_term: '12个月',
-      application_status: 'Pending'
+      labour_status: '在職', 
+      contract_salary: '12000', 
+      employment_term: '12个月'
     });
 
     await createWorker({ 
@@ -99,10 +97,9 @@ export const seedMockData = async () => {
       id_card_number: 'C9876543', 
       employer_id: e2.id, 
       position_id: p2.id, 
-      labour_status: 'Pending', 
-      contract_salary: 12000, 
-      employment_term: '12个月',
-      application_status: 'Pending'
+      labour_status: '待處理', 
+      contract_salary: '12000', 
+      employment_term: '12个月'
     });
 
     console.log('測試數據匯入完成！');
