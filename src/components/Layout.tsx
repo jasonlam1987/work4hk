@@ -44,6 +44,17 @@ const Layout: React.FC = () => {
     navigate('/login');
   };
 
+  const formatAt = (v?: string | number) => {
+    const d = v ? new Date(v) : null;
+    if (!d || Number.isNaN(d.getTime())) return '-';
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    return `${y}/${m}/${day} ${hh}:${mm}`;
+  };
+
   const navItems = [
     { to: '/dashboard', icon: LayoutDashboard, label: '業務概覽' },
     { to: '/employers', icon: Building2, label: '僱主管理' },
@@ -110,6 +121,7 @@ const Layout: React.FC = () => {
                 }}
                 className="p-2 text-gray-500 hover:text-apple-blue hover:bg-blue-50 rounded-full transition-colors relative"
                 title="消息通知"
+                aria-label="打開消息通知"
               >
                 <Bell className="w-4 h-4" />
                 {unreadCount > 0 && (
@@ -125,32 +137,67 @@ const Layout: React.FC = () => {
               >
                 <LogOut className="w-4 h-4" />
               </button>
-              {noticeOpen && (
-                <div className="absolute bottom-12 right-0 w-80 max-h-96 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg p-2 z-50">
-                  <div className="px-2 py-1 text-xs text-gray-500">消息通知</div>
-                  {messages.length === 0 ? (
-                    <div className="px-2 py-4 text-xs text-gray-400">暫無新消息</div>
-                  ) : (
-                    messages.slice(0, 20).map((m) => (
-                      <button
-                        key={m.id}
-                        onClick={() => markInAppMessageRead(m.id)}
-                        className={clsx(
-                          "w-full text-left px-2 py-2 rounded-lg border mb-1",
-                          m.readAt ? "border-gray-100 bg-gray-50" : "border-blue-100 bg-blue-50"
-                        )}
-                      >
-                        <div className="text-xs font-medium text-gray-800">{m.title}</div>
-                        <div className="text-xs text-gray-600 mt-1">{m.content}</div>
-                      </button>
-                    ))
-                  )}
-                </div>
-              )}
             </div>
           </div>
         </div>
       </aside>
+      {noticeOpen && (
+        <div className="fixed inset-0 z-50" role="dialog" aria-label="消息通知面板">
+          <div className="absolute inset-0 bg-black/20" onClick={() => setNoticeOpen(false)} />
+          <div className="absolute left-3 right-3 bottom-20 lg:left-72 lg:right-auto lg:bottom-6 lg:w-[420px] max-h-[70vh] overflow-y-auto bg-white border border-gray-200 rounded-2xl shadow-xl p-3">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-semibold text-gray-900">消息通知</h3>
+              <button
+                type="button"
+                onClick={() => setNoticeOpen(false)}
+                className="px-2 py-1 text-xs rounded border border-gray-200 hover:bg-gray-50"
+                aria-label="關閉消息通知"
+              >
+                關閉
+              </button>
+            </div>
+            {messages.length === 0 ? (
+              <div className="px-3 py-6 text-sm text-gray-400 text-center">暫無新消息</div>
+            ) : (
+              <div role="list" className="space-y-2">
+                {messages.slice(0, 20).map((m) => (
+                  <button
+                    key={m.id}
+                    onClick={() => markInAppMessageRead(m.id)}
+                    className={clsx(
+                      "w-full text-left p-3 rounded-xl border transition-colors",
+                      m.readAt ? "border-gray-200 bg-white" : "border-blue-200 bg-blue-50"
+                    )}
+                    aria-label={`查看消息：${m.title}`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm font-semibold text-gray-900">{m.title}</div>
+                      {m.kind === 'delete_review' && (
+                        <span className={clsx(
+                          "text-xs px-2 py-0.5 rounded-full",
+                          m.status === 'APPROVED' ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+                        )}>
+                          {m.status === 'APPROVED' ? '允許' : '拒絕'}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-gray-600 mt-1">{m.content}</div>
+                    {m.kind === 'delete_review' && (
+                      <div className="mt-2 rounded-lg border border-gray-200 bg-white p-2 text-xs text-gray-700">
+                        <div><span className="font-medium">審批結果：</span>{m.status === 'APPROVED' ? '已允許刪除' : '已拒絕刪除'}</div>
+                        <div><span className="font-medium">附件：</span>{m.fileName || '-'}</div>
+                        <div><span className="font-medium">操作時間：</span>{formatAt(m.operatedAt || m.createdAt)}</div>
+                        <div className="mt-1"><span className="font-medium">拒絕原因：</span>{m.status === 'REJECTED' ? (m.rejectReason || '未提供') : '-'}</div>
+                      </div>
+                    )}
+                    <div className="text-[11px] text-gray-400 mt-2">{formatAt(m.createdAt)}</div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col min-w-0">

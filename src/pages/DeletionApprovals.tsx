@@ -8,7 +8,6 @@ import { pushInAppMessage } from '../utils/inAppMessages';
 const DeletionApprovals: React.FC = () => {
   const [rows, setRows] = useState<DeleteRequestRecord[]>([]);
   const [loading, setLoading] = useState(false);
-  const [rejectReasons, setRejectReasons] = useState<Record<string, string>>({});
   const [busyId, setBusyId] = useState<string>('');
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING' | 'DONE'>('ALL');
@@ -49,8 +48,12 @@ const DeletionApprovals: React.FC = () => {
       setRows(prev => prev.map(r => (r.request_id === requestId ? { ...r, status: 'APPROVED' } : r)));
       if (request) {
         pushInAppMessage({
+          kind: 'delete_review',
+          status: 'APPROVED',
           title: '刪除申請已允許',
           content: `你提交的附件刪除申請（${request.original_name}）已被超級管理員允許並完成刪除。`,
+          fileName: request.original_name,
+          operatedAt: new Date().toISOString(),
           recipientUserId: request.requester_id,
         });
       }
@@ -71,8 +74,13 @@ const DeletionApprovals: React.FC = () => {
       setRows(prev => prev.map(r => (r.request_id === requestId ? { ...r, status: 'REJECTED' } : r)));
       if (request) {
         pushInAppMessage({
+          kind: 'delete_review',
+          status: 'REJECTED',
           title: '刪除申請被拒絕',
           content: `你提交的附件刪除申請（${request.original_name}）已被超級管理員拒絕。`,
+          fileName: request.original_name,
+          rejectReason: String((request as any).reject_reason || ''),
+          operatedAt: new Date().toISOString(),
           recipientUserId: request.requester_id,
         });
       }

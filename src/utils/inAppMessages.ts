@@ -1,7 +1,13 @@
 export type InAppMessage = {
   id: string;
+  kind?: 'delete_review' | 'generic';
   title: string;
   content: string;
+  status?: 'APPROVED' | 'REJECTED';
+  fileName?: string;
+  rejectReason?: string;
+  operatedAt?: string;
+  operatorName?: string;
   createdAt: number;
   readAt?: number;
   recipientUserId?: string;

@@ -163,3 +163,76 @@ test('delete request flow updates status and deletes physical file on approve', 
   const dl = await request.get(uploaded.download_url, { headers: { 'x-user-role': 'manager' } });
   expect(dl.ok()).toBeFalsy();
 });
+
+test('delete request can be submitted again after reject', async ({ request }) => {
+  const ownerId = 654;
+  const up = await request.post('/api/ai/files', {
+    headers: { 'x-user-role': 'manager', 'x-user-id': 'louise', 'x-user-name': 'louise' },
+    data: {
+      module: 'employers',
+      owner_id: ownerId,
+      folder: '企業資料',
+      file_name: 'delete-reject-retry.pdf',
+      mime_type: 'application/pdf',
+      data_url: toDataUrl('application/pdf', Buffer.from('%PDF-1.4\ndelete-reject-retry\n%%EOF', 'utf8')),
+    },
+  });
+  expect(up.ok()).toBeTruthy();
+  const uploaded = await up.json();
+
+  const csrfResp = await request.get('/api/ai/csrf');
+  const csrf = await csrfResp.json();
+  const token = String(csrf?.csrf_token || '');
+  expect(token.length).toBeGreaterThan(10);
+
+  const payload = {
+    uid: uploaded.uid,
+    module: 'employers',
+    owner_id: ownerId,
+    folder: '企業資料',
+    file_name: uploaded.original_name,
+    object_path: uploaded.object_path,
+    stored_path: uploaded.stored_path,
+    uploader_id: uploaded.uploader_id,
+    uploader_name: uploaded.uploader_name,
+    company_name: '測試公司',
+    section_name: '企業資料',
+  };
+
+  const firstReq = await request.post('/api/ai/files-delete-request', {
+    headers: {
+      'x-user-role': 'manager',
+      'x-user-id': 'louise',
+      'x-user-name': 'louise',
+      'x-csrf-token': token,
+    },
+    data: { ...payload, reason: '錯誤上傳' },
+  });
+  expect(firstReq.ok()).toBeTruthy();
+  const first = await firstReq.json();
+
+  const rejectReq = await request.post('/api/ai/files-delete-review', {
+    headers: {
+      'x-user-role': 'super_admin',
+      'x-user-id': 'root',
+      'x-user-name': 'root',
+      'x-csrf-token': token,
+    },
+    data: { request_id: first.request.request_id, action: 'REJECT' },
+  });
+  expect(rejectReq.ok()).toBeTruthy();
+
+  const secondReq = await request.post('/api/ai/files-delete-request', {
+    headers: {
+      'x-user-role': 'manager',
+      'x-user-id': 'louise',
+      'x-user-name': 'louise',
+      'x-csrf-token': token,
+    },
+    data: { ...payload, reason: '再次申請' },
+  });
+  expect(secondReq.ok()).toBeTruthy();
+  const second = await secondReq.json();
+  expect(second.code).toBe('DELETE_REQUEST_CREATED');
+  expect(second.request?.status).toBe('PENDING');
+});

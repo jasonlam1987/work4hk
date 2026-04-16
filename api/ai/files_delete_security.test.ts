@@ -180,4 +180,36 @@ describe('file delete security flow', () => {
     expect(secondReviewRes.statusCode).toBe(409);
     expect(secondReview.code).toBe('REQUEST_ALREADY_REVIEWED');
   });
+
+  it('can create new delete request again after previous rejection', async () => {
+    await ensureDirs();
+    await writeIndex({ records: {}, used_tokens: {}, delete_requests: {}, audit_logs: [] });
+    const uid = await makeFile();
+
+    const firstCreateReq = makeReq(
+      'POST',
+      { uid, reason: '錯誤上傳', company_name: 'A 公司', section_name: '企業資料' },
+      roleHeaders('manager')
+    );
+    const firstCreateRes = makeRes();
+    await filesDeleteRequestHandler(firstCreateReq, firstCreateRes);
+    const firstCreated = JSON.parse(String(firstCreateRes.state.body || '{}'));
+
+    const rejectReq = makeReq('POST', { request_id: firstCreated?.request?.request_id, action: 'REJECT' }, roleHeaders('super_admin'));
+    const rejectRes = makeRes();
+    await filesDeleteReviewHandler(rejectReq, rejectRes);
+    expect(rejectRes.statusCode).toBe(200);
+
+    const secondCreateReq = makeReq(
+      'POST',
+      { uid, reason: '再次申請', company_name: 'A 公司', section_name: '企業資料' },
+      roleHeaders('manager')
+    );
+    const secondCreateRes = makeRes();
+    await filesDeleteRequestHandler(secondCreateReq, secondCreateRes);
+    const secondCreated = JSON.parse(String(secondCreateRes.state.body || '{}'));
+    expect(secondCreateRes.statusCode).toBe(200);
+    expect(secondCreated.code).toBe('DELETE_REQUEST_CREATED');
+    expect(secondCreated?.request?.status).toBe('PENDING');
+  });
 });

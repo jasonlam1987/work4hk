@@ -54,10 +54,28 @@ export default async function handler(req: any, res: any) {
         original_path: row.stored_path,
         ip: parseIp(req),
         user_agent: parseUserAgent(req),
-        detail: rejectReason,
+        detail: rejectReason || 'rejected-without-reason',
+      });
+      appendAuditLog(idx, {
+        event: 'DELETE_PENDING_STATE_ROLLED_BACK',
+        operator_id: row.reviewer_id,
+        operator_name: row.reviewer_name || 'unknown',
+        uid: row.uid,
+        request_id: row.request_id,
+        original_path: row.stored_path,
+        ip: parseIp(req),
+        user_agent: parseUserAgent(req),
+        detail: 'reset-to-normal; release-lock-markers; clear-pending-counters',
       });
       await writeIndex(idx);
-      return respond(res, 200, { ok: true, code: 'REQUEST_REJECTED', request: row });
+      return respond(res, 200, {
+        ok: true,
+        code: 'REQUEST_REJECTED',
+        request: row,
+        state_transition: { from: 'PENDING', to: 'NORMAL' },
+        released_locks: [row.uid],
+        pending_cache_cleared: true,
+      });
     }
 
     if (action !== 'APPROVE') return respond(res, 400, { code: 'INVALID_ACTION', error: 'invalid action' });

@@ -11,6 +11,7 @@ import { getAuthIdentity, isSuperAdmin } from '../utils/authRole';
 import FileDeleteActionDialog from '../components/FileDeleteActionDialog';
 import { pushDeleteNotice } from '../utils/deleteNotifications';
 import { pushInAppMessage } from '../utils/inAppMessages';
+import { markDeletePending, releaseDeletePending } from '../utils/deletePendingState';
 
 interface StoredFile {
   id: string;
@@ -76,6 +77,7 @@ const Employers: React.FC = () => {
   const [activeFolder, setActiveFolder] = useState<string>(FOLDERS[0]);
   const [storedFiles, setStoredFiles] = useState<StoredFile[]>([]);
   const fileFolderCacheRef = useRef<Record<string, StoredFile[]>>({});
+  const optimisticPendingUntilRef = useRef<Record<string, number>>({});
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const uploadScope = `employers:${selectedEmployerForFiles?.id || 0}:${activeFolder}`;
   const tasksByScope = useUploadStore(s => s.tasksByScope);
@@ -147,8 +149,19 @@ const Employers: React.FC = () => {
           if (String(row.module) !== 'employers') continue;
           if (Number(row.owner_id || 0) !== Number(selectedEmployerForFiles.id)) continue;
           if (!next[row.uid]) next[row.uid] = row.status;
+          if (row.status === 'REJECTED') releaseDeletePending(row.uid);
+          if (row.status === 'APPROVED') releaseDeletePending(row.uid);
         }
-        setDeleteStatusByUid(prev => ({ ...prev, ...next }));
+        const now = Date.now();
+        for (const [uid, until] of Object.entries(optimisticPendingUntilRef.current)) {
+          if (next[uid]) {
+            delete optimisticPendingUntilRef.current[uid];
+            continue;
+          }
+          if (until > now) next[uid] = 'PENDING';
+          else delete optimisticPendingUntilRef.current[uid];
+        }
+        setDeleteStatusByUid(next);
       } catch {
       }
     };
@@ -305,6 +318,8 @@ const Employers: React.FC = () => {
 
   const submitDeleteRequest = async (ctx: DeleteContext, reason: string) => {
     const resp = await requestDeleteFile(ctx, reason);
+    markDeletePending(ctx.uid);
+    optimisticPendingUntilRef.current[ctx.uid] = Date.now() + 15_000;
     setDeleteStatusByUid(prev => ({ ...prev, [ctx.uid]: 'PENDING' }));
     const msg = String(resp?.message || '已提交刪除申請，等待超級管理員審核');
     pushDeleteNotice({ at: Date.now(), message: msg, uid: ctx.uid, module: ctx.module });

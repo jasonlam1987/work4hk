@@ -80,6 +80,7 @@ export type FileAuditLog = {
     | 'DELETE_REQUEST_CREATED'
     | 'DELETE_REQUEST_APPROVED'
     | 'DELETE_REQUEST_REJECTED'
+    | 'DELETE_PENDING_STATE_ROLLED_BACK'
     | 'FILE_PHYSICALLY_DELETED'
     | 'FILE_DELETE_FAILED';
   operator_id: string;
