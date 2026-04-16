@@ -13,6 +13,7 @@ import {
   verifySuperAdmin,
   writeIndex,
 } from './_file_store.js';
+import { listDeleteRequestsFromStore, saveDeleteRequestToStore } from './_delete_requests_store.js';
 export const config = {
   runtime: 'nodejs',
 };
@@ -30,7 +31,8 @@ export default async function handler(req: any, res: any) {
     const action = String(body?.action || '').trim().toUpperCase();
     const rejectReason = String(body?.reject_reason || '').trim();
 
-    const row = idx.delete_requests?.[requestId];
+    const fromStore = await listDeleteRequestsFromStore(idx.delete_requests || {});
+    const row = fromStore.find((it: any) => it.request_id === requestId) || idx.delete_requests?.[requestId];
     if (!row) return respond(res, 404, { code: 'REQUEST_NOT_FOUND', error: 'request not found' });
     if (row.status !== 'PENDING') return respond(res, 409, { code: 'REQUEST_ALREADY_REVIEWED', error: 'request already reviewed' });
 
@@ -42,6 +44,7 @@ export default async function handler(req: any, res: any) {
       row.status = 'REJECTED';
       row.reject_reason = rejectReason || '';
       idx.delete_requests[requestId] = row;
+      await saveDeleteRequestToStore(row as any, idx.delete_requests || {});
       appendAuditLog(idx, {
         event: 'DELETE_REQUEST_REJECTED',
         operator_id: row.reviewer_id,
@@ -85,6 +88,7 @@ export default async function handler(req: any, res: any) {
     }
     row.status = 'APPROVED';
     idx.delete_requests[requestId] = row;
+    await saveDeleteRequestToStore(row as any, idx.delete_requests || {});
 
     appendAuditLog(idx, {
       event: 'DELETE_REQUEST_APPROVED',

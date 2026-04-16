@@ -1,4 +1,5 @@
 import { ensureDirs, parseRole, parseUserId, readIndex, respond, verifyRole } from './_file_store.js';
+import { listDeleteRequestsFromStore } from './_delete_requests_store.js';
 
 export const config = {
   runtime: 'nodejs',
@@ -12,9 +13,7 @@ export default async function handler(req: any, res: any) {
     const idx = await readIndex();
     const role = parseRole(req);
     const userId = parseUserId(req);
-    const all = Object.values(idx.delete_requests || {}).sort((a: any, b: any) =>
-      String(b.created_at || '').localeCompare(String(a.created_at || ''))
-    );
+    const all = await listDeleteRequestsFromStore(idx.delete_requests || {});
     const items = role.includes('super')
       ? all
       : all.filter((it: any) => String(it.requester_id || '') === String(userId || ''));

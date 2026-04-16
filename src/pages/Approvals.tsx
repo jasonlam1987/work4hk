@@ -261,7 +261,7 @@ const Approvals: React.FC = () => {
           if (Number(row.owner_id || 0) !== Number(selectedApprovalForFiles.id)) continue;
           if (!next[row.uid]) next[row.uid] = row.status;
         }
-        setDeleteStatusByUid(next);
+        setDeleteStatusByUid(prev => ({ ...prev, ...next }));
       } catch {
       }
     };

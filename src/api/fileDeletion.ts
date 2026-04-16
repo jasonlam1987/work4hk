@@ -79,25 +79,38 @@ export const permanentDeleteFile = async (uid: string, confirmText: string, cont
 };
 
 export const requestDeleteFile = async (ctx: DeleteContext, reason: string) => {
-  const res = await apiClient.post(
-    '/ai/files-delete-request',
-    {
-      uid: ctx.uid,
-      module: ctx.module,
-      owner_id: Number(ctx.ownerId || 0),
-      folder: ctx.folder,
-      file_name: ctx.fileName,
-      stored_path: ctx.storedPath || '',
-      object_path: objectPathFromContext(ctx),
-      uploader_id: ctx.uploaderId || '',
-      uploader_name: ctx.uploaderName || '',
-      reason,
-      company_name: ctx.companyName,
-      section_name: ctx.sectionName,
-    },
-    { headers: await headersWithIdentity() }
-  );
-  return res.data;
+  try {
+    const res = await apiClient.post(
+      '/ai/files-delete-request',
+      {
+        uid: ctx.uid,
+        module: ctx.module,
+        owner_id: Number(ctx.ownerId || 0),
+        folder: ctx.folder,
+        file_name: ctx.fileName,
+        stored_path: ctx.storedPath || '',
+        object_path: objectPathFromContext(ctx),
+        uploader_id: ctx.uploaderId || '',
+        uploader_name: ctx.uploaderName || '',
+        reason,
+        company_name: ctx.companyName,
+        section_name: ctx.sectionName,
+      },
+      { headers: await headersWithIdentity() }
+    );
+    return res.data;
+  } catch (err: any) {
+    const status = Number(err?.response?.status || 0);
+    const code = String(err?.response?.data?.code || '');
+    if (status === 409 && code === 'DUPLICATE_PENDING_REQUEST') {
+      return {
+        ok: true,
+        code: 'DELETE_REQUEST_ALREADY_PENDING',
+        message: '已向超級管理員申請刪除，待批准後將自動刪除',
+      };
+    }
+    throw err;
+  }
 };
 
 export const listDeleteRequests = async () => {

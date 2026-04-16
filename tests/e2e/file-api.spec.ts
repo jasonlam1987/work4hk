@@ -112,6 +112,38 @@ test('delete request flow updates status and deletes physical file on approve', 
   const pending = (listed.items || []).find((x: any) => x.uid === uploaded.uid);
   expect(pending?.status).toBe('PENDING');
 
+  const listBySuper = await request.get('/api/ai/files-delete-requests', {
+    headers: { 'x-user-role': 'super_admin', 'x-user-id': 'root', 'x-user-name': 'root' },
+  });
+  expect(listBySuper.ok()).toBeTruthy();
+  const listedBySuper = await listBySuper.json();
+  const pendingBySuper = (listedBySuper.items || []).find((x: any) => x.uid === uploaded.uid);
+  expect(pendingBySuper?.status).toBe('PENDING');
+
+  const duplicate = await request.post('/api/ai/files-delete-request', {
+    headers: {
+      'x-user-role': 'manager',
+      'x-user-id': 'louise',
+      'x-user-name': 'louise',
+      'x-csrf-token': token,
+    },
+    data: {
+      uid: uploaded.uid,
+      module: 'employers',
+      owner_id: ownerId,
+      folder: '企業資料',
+      file_name: uploaded.original_name,
+      object_path: uploaded.object_path,
+      stored_path: uploaded.stored_path,
+      uploader_id: uploaded.uploader_id,
+      uploader_name: uploaded.uploader_name,
+      reason: '錯誤上傳',
+      company_name: '測試公司',
+      section_name: '企業資料',
+    },
+  });
+  expect(duplicate.status()).toBe(409);
+
   const approve = await request.post('/api/ai/files-delete-review', {
     headers: {
       'x-user-role': 'super_admin',

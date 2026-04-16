@@ -14,6 +14,7 @@ import {
   verifySuperAdmin,
   writeIndex,
 } from './_file_store.js';
+import { listDeleteRequestsFromStore, saveDeleteRequestToStore } from './_delete_requests_store.js';
 export const config = {
   runtime: 'nodejs',
 };
@@ -62,9 +63,8 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    const dup = Object.values(idx.delete_requests || {}).find(
-      (it: any) => it.uid === uid && it.status === 'PENDING'
-    );
+    const existing = await listDeleteRequestsFromStore(idx.delete_requests || {});
+    const dup = existing.find((it: any) => it.uid === uid && it.status === 'PENDING');
     if (dup) return respond(res, 409, { code: 'DUPLICATE_PENDING_REQUEST', error: '已有待審核刪除申請' });
 
     const baseRec = rec || {
@@ -95,6 +95,7 @@ export default async function handler(req: any, res: any) {
       section_name: sectionName,
     });
     idx.delete_requests[row.request_id] = row;
+    await saveDeleteRequestToStore(row as any, idx.delete_requests || {});
 
     const msg = '已向超級管理員申請刪除，待批准後將自動刪除';
     appendAuditLog(idx, {
