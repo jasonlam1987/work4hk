@@ -14,6 +14,10 @@ import {
   writeIndex,
 } from './_file_store';
 
+export const config = {
+  runtime: 'nodejs',
+};
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') return respond(res, 405, { code: 'METHOD_NOT_ALLOWED', error: 'Method Not Allowed' });
   if (!verifyCsrf(req)) return respond(res, 403, { code: 'CSRF_INVALID', error: 'csrf invalid' });

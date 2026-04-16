@@ -9,6 +9,10 @@ import {
   writeIndex,
 } from './_file_store';
 
+export const config = {
+  runtime: 'nodejs',
+};
+
 export default async function handler(req: any, res: any) {
   if (!verifyRole(req)) return respond(res, 403, { code: 'FORBIDDEN', error: 'forbidden' });
   if (!['POST', 'DELETE', 'GET'].includes(req.method)) return respond(res, 405, { code: 'METHOD_NOT_ALLOWED', error: 'Method Not Allowed' });

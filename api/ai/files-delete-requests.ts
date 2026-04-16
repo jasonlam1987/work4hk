@@ -1,5 +1,9 @@
 import { ensureDirs, parseRole, readIndex, respond, verifyRole } from './_file_store';
 
+export const config = {
+  runtime: 'nodejs',
+};
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'GET') return respond(res, 405, { code: 'METHOD_NOT_ALLOWED', error: 'Method Not Allowed' });
   if (!verifyRole(req)) return respond(res, 403, { code: 'FORBIDDEN', error: 'forbidden' });

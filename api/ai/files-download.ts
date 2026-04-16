@@ -2,6 +2,10 @@ import { createReadStream } from 'node:fs';
 import { ensureDirs, readIndex, respond, verifyOneTimeToken, verifyRole, writeIndex } from './_file_store';
 import { downloadFromSupabaseStorage } from './_supabase_storage';
 
+export const config = {
+  runtime: 'nodejs',
+};
+
 export default async function handler(req: any, res: any) {
   if (!verifyRole(req)) return respond(res, 403, { code: 'FORBIDDEN', error: 'forbidden' });
   if (req.method !== 'GET') return respond(res, 405, { code: 'METHOD_NOT_ALLOWED', error: 'Method Not Allowed' });
