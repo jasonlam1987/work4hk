@@ -1,11 +1,13 @@
 import React, { useCallback, useRef, useState, useEffect } from 'react';
 import { Search, Plus, Edit2, Loader2, RefreshCw, Key, Eye, EyeOff, Trash2, Users2, Handshake } from 'lucide-react';
 import clsx from 'clsx';
+import apiClient from '../api/client';
 import Modal from '../components/Modal';
 import { 
   Partner, PartnerCreate, getPartners, createPartner, updatePartner
 } from '../api/settings';
 import Users, { UsersHandle } from './Users';
+import { getAuthIdentity } from '../utils/authRole';
 
 type Tab = 'partners' | 'users' | 'api_keys';
 
@@ -135,18 +137,54 @@ const Settings: React.FC = () => {
     }, 500);
   };
 
-  const clearLocalMockData = () => {
-    const ok = window.confirm('確定要清除本機模擬/暫存資料嗎？此操作只會影響目前瀏覽器，且無法回復。');
+  const clearLocalMockData = async () => {
+    const ok = window.confirm('確定要清除所有管理板塊的本機資料嗎（含審批/僱主/勞工/職位/附件與通知暫存）？此操作只會影響目前瀏覽器，且無法回復。');
     if (!ok) return;
-    const keys = [
+    try {
+      const identity = getAuthIdentity();
+      const csrfToken =
+        document.cookie
+          .split('; ')
+          .find((x) => x.startsWith('csrf_token='))
+          ?.split('=')
+          .slice(1)
+          .join('=') || '';
+      await apiClient.post(
+        '/ai/files-delete-requests-reset',
+        {},
+        {
+          headers: {
+            'x-user-role': identity.roleKey || 'admin',
+            'x-user-id': identity.userId || '',
+            'x-user-name': identity.userName || '',
+            'x-csrf-token': decodeURIComponent(csrfToken || ''),
+          },
+        }
+      );
+    } catch {
+      // If backend cleanup fails, still clear local browser data below.
+    }
+    const exactKeys = new Set([
       'mock_approvals',
       'mock_approval_files',
       'mock_employer_files',
-      'cache_employers_list_v1',
-      'cache_approvals_list_v1',
+      'mock_worker_files',
       'mock_deleted_user_ids',
-    ];
-    keys.forEach(k => localStorage.removeItem(k));
+      'approval_quota_details_v1',
+      'approval_versions_v1',
+      'approval_reminders_v1',
+      'worker_profiles_v1',
+      'delete_request_notify',
+      'work4hk_in_app_messages_v1',
+      'work4hk_delete_pending_state_v1',
+    ]);
+    const prefixKeys = ['cache_'];
+    const allKeys = Object.keys(localStorage);
+    for (const key of allKeys) {
+      if (exactKeys.has(key) || prefixKeys.some((p) => key.startsWith(p))) {
+        localStorage.removeItem(key);
+      }
+    }
     sessionStorage.removeItem('dashboardStats');
     window.location.reload();
   };
@@ -308,9 +346,9 @@ const Settings: React.FC = () => {
             <div className="rounded-apple-sm border border-red-200/70 bg-red-50/60 backdrop-blur-xl p-6 shadow-apple-sm">
               <h3 className="text-lg font-semibold text-gray-900 flex items-center">
                 <Trash2 className="w-5 h-5 mr-2 text-red-600" />
-                本機模擬資料
+                本機管理資料
               </h3>
-              <p className="text-sm text-gray-600 mt-1">清除瀏覽器內的本機模擬/暫存資料（只影響目前瀏覽器，且無法回復）。</p>
+              <p className="text-sm text-gray-600 mt-1">清除瀏覽器內所有管理板塊的本機快取/暫存資料（含審批模塊；只影響目前瀏覽器，且無法回復）。</p>
               <div className="mt-4 flex justify-end">
                 <button
                   type="button"

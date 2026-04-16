@@ -3,6 +3,7 @@ import {
   downloadFromSupabaseStorage,
   isSupabaseStorageEnabled,
   listSupabaseStorageByPrefix,
+  removeFromSupabaseStorage,
   uploadToSupabaseStorage,
 } from './_supabase_storage.js';
 
@@ -112,4 +113,25 @@ export const saveDeleteRequestToStore = async (row: StoredDeleteRequest, fallbac
   }
   const bytes = Buffer.from(JSON.stringify(row), 'utf8');
   await uploadToSupabaseStorage(objectPath(row.request_id), bytes, 'application/json; charset=utf-8');
+};
+
+export const clearDeleteRequestsFromStore = async (fallbackMap?: Record<string, any>) => {
+  if (!isSupabaseStorageEnabled()) {
+    if (fallbackMap && typeof fallbackMap === 'object') {
+      Object.keys(fallbackMap).forEach((k) => delete fallbackMap[k]);
+    }
+    return { removed: 0 };
+  }
+  const rows = await listSupabaseStorageByPrefix(REQUEST_PREFIX);
+  let removed = 0;
+  for (const row of rows) {
+    const name = String(row?.name || '');
+    if (!name.endsWith('.json')) continue;
+    await removeFromSupabaseStorage(`${REQUEST_PREFIX}${name}`);
+    removed += 1;
+  }
+  if (fallbackMap && typeof fallbackMap === 'object') {
+    Object.keys(fallbackMap).forEach((k) => delete fallbackMap[k]);
+  }
+  return { removed };
 };

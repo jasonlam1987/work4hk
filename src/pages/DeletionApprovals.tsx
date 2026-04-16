@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import clsx from 'clsx';
 import { listDeleteRequests, reviewDeleteRequest, DeleteRequestRecord } from '../api/fileDeletion';
 import { isSuperAdmin } from '../utils/authRole';
 import { normalizeErrorMessage } from '../utils/errorMessage';
@@ -204,26 +205,36 @@ const DeletionApprovals: React.FC = () => {
                 <td className="px-4 py-3">{r.reason}</td>
                 <td className="px-4 py-3">{r.status === 'PENDING' ? '待處理' : '處理完成'}</td>
                 <td className="px-4 py-3">
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => doApprove(r.request_id)}
-                      className="px-2 py-1 rounded bg-green-600 text-white text-xs disabled:opacity-50"
-                      disabled={busyId === r.request_id || r.status !== 'PENDING'}
-                    >
-                      允許
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => doReject(r.request_id)}
-                      className="px-2 py-1 rounded bg-red-600 text-white text-xs disabled:opacity-50"
-                      disabled={busyId === r.request_id || r.status !== 'PENDING'}
-                    >
-                      拒絕
-                    </button>
-                  </div>
-                  {r.status !== 'PENDING' && (
-                    <div className="mt-1 text-xs text-gray-400">此申請已處理完成，不可再操作</div>
+                  {r.status === 'PENDING' ? (
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => doApprove(r.request_id)}
+                        className="px-2 py-1 rounded bg-green-600 text-white text-xs disabled:opacity-50"
+                        disabled={busyId === r.request_id}
+                      >
+                        允許
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => doReject(r.request_id)}
+                        className="px-2 py-1 rounded bg-red-600 text-white text-xs disabled:opacity-50"
+                        disabled={busyId === r.request_id}
+                      >
+                        拒絕
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-start gap-1">
+                      <span
+                        className={clsx(
+                          "px-2 py-1 rounded text-xs text-white",
+                          r.status === 'APPROVED' ? "bg-green-600" : "bg-red-600"
+                        )}
+                      >
+                        {r.status === 'APPROVED' ? '允許' : '拒絕'}
+                      </span>
+                    </div>
                   )}
                 </td>
               </tr>
