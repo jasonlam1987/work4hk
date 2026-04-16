@@ -217,7 +217,10 @@ export default async function handler(req: any, res: any) {
       console.error('[files] UNSUPPORTED_FILE_TYPE', { detail: msg });
       return respond(res, 400, { code: 'UNSUPPORTED_FILE_TYPE', error: 'Unsupported file type' });
     }
-    console.error('[files] UPLOAD_FAILED', { detail: msg });
-    return respond(res, 500, { code: 'UPLOAD_FAILED', error: 'Upload failed', detail: msg });
+    const action = req?.method === 'DELETE' ? 'DELETE' : req?.method === 'GET' ? 'LIST' : 'UPLOAD';
+    console.error(`[files] ${action}_FAILED`, { detail: msg });
+    const code = action === 'DELETE' ? 'DELETE_FAILED' : action === 'LIST' ? 'LIST_FAILED' : 'UPLOAD_FAILED';
+    const error = action === 'DELETE' ? 'Delete failed' : action === 'LIST' ? 'List failed' : 'Upload failed';
+    return respond(res, 500, { code, error, detail: msg });
   }
 }

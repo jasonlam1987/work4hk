@@ -94,7 +94,7 @@ export const removeFromSupabaseStorage = async (objectPath: string) => {
   const resp = await fetch(url, {
     method: 'DELETE',
     headers: { ...baseHeaders(), 'Content-Type': 'application/json' },
-    body: JSON.stringify([objectPath]),
+    body: JSON.stringify({ prefixes: [objectPath] }),
   });
   if (!resp.ok) {
     const detail = await resp.text().catch(() => '');
