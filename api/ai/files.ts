@@ -1,5 +1,12 @@
 import { createHash, createHmac, randomUUID } from 'node:crypto';
-import { getSupabaseObjectPath, isSupabaseStorageEnabled, removeFromSupabaseStorage, uploadToSupabaseStorage } from './_supabase_storage.js';
+import {
+  getSupabaseFolderPrefix,
+  getSupabaseObjectPath,
+  isSupabaseStorageEnabled,
+  listSupabaseStorageByPrefix,
+  removeFromSupabaseStorage,
+  uploadToSupabaseStorage,
+} from './_supabase_storage.js';
 
 export const config = {
   runtime: 'nodejs',
@@ -103,7 +110,52 @@ export default async function handler(req: any, res: any) {
     }
 
     if (req.method === 'GET') {
-      return respond(res, 200, { items: [] });
+      const moduleName = String(req?.query?.module || '').trim() as 'employers' | 'approvals' | 'workers';
+      const ownerId = Number(req?.query?.owner_id || 0);
+      const folder = String(req?.query?.folder || '').trim();
+      if (!moduleName || !['employers', 'approvals', 'workers'].includes(moduleName)) {
+        return respond(res, 400, { code: 'INVALID_MODULE', error: 'invalid module' });
+      }
+      if (!ownerId || ownerId < 1) return respond(res, 400, { code: 'INVALID_OWNER_ID', error: 'invalid owner_id' });
+      if (!folder) return respond(res, 200, { items: [] });
+
+      const prefix = getSupabaseFolderPrefix(moduleName, ownerId, folder);
+      const rows = await listSupabaseStorageByPrefix(prefix);
+      const items = rows
+        .filter((it: any) => it && !it.id?.endsWith('/'))
+        .map((it: any) => {
+          const nameRaw = String(it.name || '');
+          const sep = nameRaw.indexOf('__');
+          const uid = sep > 0 ? nameRaw.slice(0, sep) : nameRaw;
+          const originalName = sep > 0 ? nameRaw.slice(sep + 2) : nameRaw;
+          const objectPath = `${prefix}${nameRaw}`;
+          const mimeType = String(it?.metadata?.mimetype || 'application/octet-stream');
+          const size = Number(it?.metadata?.size || 0);
+          const createdAt = String(it?.created_at || new Date().toISOString());
+          const token = createDownloadToken({
+            uid,
+            object_path: objectPath,
+            mime_type: mimeType,
+            original_name: originalName,
+            exp: Math.floor(Date.now() / 1000) + 10 * 60,
+          });
+          return {
+            uid,
+            module: moduleName,
+            owner_id: ownerId,
+            folder,
+            original_name: originalName,
+            mime_type: mimeType,
+            size,
+            stored_path: `supabase://${objectPath}`,
+            object_path: objectPath,
+            created_at: createdAt,
+            download_url: `/api/ai/files-download?t=${encodeURIComponent(token)}`,
+            token_expires_in: 600,
+          };
+        })
+        .sort((a: any, b: any) => String(b.created_at).localeCompare(String(a.created_at)));
+      return respond(res, 200, { items });
     }
 
     const body = await readJsonBody(req);
@@ -132,7 +184,7 @@ export default async function handler(req: any, res: any) {
 
     const uid = randomUUID();
     const sha256 = createHash('sha256').update(bytes).digest('hex');
-    const objectPath = getSupabaseObjectPath(moduleName, ownerId, uid, fileName);
+    const objectPath = getSupabaseObjectPath(moduleName, ownerId, folder, uid, fileName);
     await uploadToSupabaseStorage(objectPath, bytes, mimeType);
     const token = createDownloadToken({
       uid,

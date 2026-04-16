@@ -284,7 +284,7 @@ export const storeFileFromDataUrl = async (body: any) => {
     throw new Error('temp file verify failed');
   }
   const useSupabase = isSupabaseStorageEnabled();
-  const objectPath = useSupabase ? getSupabaseObjectPath(moduleName, ownerId, uid, fileName) : '';
+  const objectPath = useSupabase ? getSupabaseObjectPath(moduleName, ownerId, folder, uid, fileName) : '';
   if (useSupabase) {
     await uploadToSupabaseStorage(objectPath, bytes, mimeType);
     await fs.unlink(tmpPath).catch(() => undefined);

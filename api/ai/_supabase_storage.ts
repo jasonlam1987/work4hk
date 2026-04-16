@@ -7,15 +7,46 @@ const enabled = Boolean(supabaseUrl && supabaseServiceRoleKey);
 export const isSupabaseStorageEnabled = () => enabled;
 
 const encodePath = (p: string) => String(p || '').split('/').map(encodeURIComponent).join('/');
+const safeSegment = (v: string) => String(v || '').replace(/[^\w.\-]/g, '_');
 
 const baseHeaders = () => ({
   apikey: supabaseServiceRoleKey,
   Authorization: `Bearer ${supabaseServiceRoleKey}`,
 });
 
-export const getSupabaseObjectPath = (moduleName: string, ownerId: number, uid: string, fileName: string) => {
-  const safeName = String(fileName || 'file').replace(/[^\w.\-]/g, '_');
-  return `${moduleName}/${ownerId}/${uid}/${safeName}`;
+export const getSupabaseObjectPath = (
+  moduleName: string,
+  ownerId: number,
+  folder: string,
+  uid: string,
+  fileName: string
+) => {
+  const safeName = safeSegment(fileName || 'file');
+  return `${moduleName}/${ownerId}/${safeSegment(folder)}/${uid}__${safeName}`;
+};
+
+export const getSupabaseFolderPrefix = (moduleName: string, ownerId: number, folder: string) =>
+  `${moduleName}/${ownerId}/${safeSegment(folder)}/`;
+
+export const listSupabaseStorageByPrefix = async (prefix: string) => {
+  if (!enabled) throw new Error('supabase storage not configured');
+  const url = `${supabaseUrl}/storage/v1/object/list/${encodePath(bucket)}`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { ...baseHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      prefix,
+      limit: 1000,
+      offset: 0,
+      sortBy: { column: 'created_at', order: 'desc' },
+    }),
+  });
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => '');
+    throw new Error(`supabase list failed: ${resp.status} ${detail}`);
+  }
+  const json = await resp.json().catch(() => []);
+  return Array.isArray(json) ? json : [];
 };
 
 export const uploadToSupabaseStorage = async (
