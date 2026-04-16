@@ -40,6 +40,21 @@ export default async function handler(req: any, res: any) {
       return respond(res, 400, { code: 'SUPER_ADMIN_SHOULD_DELETE_DIRECTLY', error: 'super admin should call delete endpoint' });
     }
 
+    const requesterId = parseUserId(req);
+    const uploaderId = String((rec as any)?.uploader_id || '').trim();
+    if (!uploaderId) {
+      return respond(res, 403, {
+        code: 'UPLOADER_NOT_BOUND',
+        error: '此文件未綁定上傳者，請由超級管理員處理',
+      });
+    }
+    if (!requesterId || requesterId !== uploaderId) {
+      return respond(res, 403, {
+        code: 'ONLY_UPLOADER_CAN_REQUEST_DELETE',
+        error: '只有該文件上傳者可申請刪除',
+      });
+    }
+
     const dup = Object.values(idx.delete_requests || {}).find(
       (it: any) => it.uid === uid && it.status === 'PENDING'
     );
@@ -48,7 +63,7 @@ export default async function handler(req: any, res: any) {
     const row = createDeleteRequestRecord({
       rec,
       reason,
-      requester_id: parseUserId(req),
+      requester_id: requesterId,
       requester_name: parseUserName(req),
     });
     idx.delete_requests[row.request_id] = row;

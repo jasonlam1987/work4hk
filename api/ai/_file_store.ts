@@ -34,6 +34,8 @@ export type FileRecord = {
   stored_path: string;
   storage_backend?: 'local' | 'supabase';
   storage_object_path?: string;
+  uploader_id?: string;
+  uploader_name?: string;
   created_at: string;
   deleted_at?: string;
 };
@@ -251,7 +253,10 @@ export const verifyOneTimeToken = (uid: string, token: string, usedTokens: Recor
   return { ok: true as const };
 };
 
-export const storeFileFromDataUrl = async (body: any) => {
+export const storeFileFromDataUrl = async (
+  body: any,
+  actor?: { user_id?: string; user_name?: string }
+) => {
   const moduleName = String(body?.module || '').trim() as 'employers' | 'approvals' | 'workers';
   const ownerId = Number(body?.owner_id || 0);
   const folder = String(body?.folder || '').trim();
@@ -305,6 +310,8 @@ export const storeFileFromDataUrl = async (body: any) => {
     stored_path: useSupabase ? `supabase://${objectPath}` : finalPath,
     storage_backend: useSupabase ? 'supabase' : 'local',
     storage_object_path: useSupabase ? objectPath : undefined,
+    uploader_id: String(actor?.user_id || '').trim() || undefined,
+    uploader_name: String(actor?.user_name || '').trim() || undefined,
     created_at: new Date().toISOString(),
   };
   return rec;

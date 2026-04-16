@@ -26,6 +26,8 @@ const verifyRole = (req: any) => {
   const role = String(req?.headers?.['x-user-role'] || '').toLowerCase();
   return role.includes('admin') || role.includes('manager');
 };
+const parseUserId = (req: any) => String(req?.headers?.['x-user-id'] || '').trim();
+const parseUserName = (req: any) => String(req?.headers?.['x-user-name'] || '').trim();
 
 const readJsonBody = async (req: any) => {
   const chunks: Buffer[] = [];
@@ -39,6 +41,32 @@ const createDownloadToken = (payload: any) => {
   const raw = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
   const sig = sign(raw);
   return `${raw}.${sig}`;
+};
+
+const encodeUserSegment = (v: string) => Buffer.from(String(v || ''), 'utf8').toString('base64url');
+const decodeUserSegment = (v: string) => {
+  try {
+    return Buffer.from(String(v || ''), 'base64url').toString('utf8');
+  } catch {
+    return '';
+  }
+};
+const injectUploaderIntoObjectPath = (objectPath: string, uid: string, uploaderId: string, uploaderName: string) => {
+  const marker = `uploader_${encodeUserSegment(uploaderId || 'unknown')}_n_${encodeUserSegment(uploaderName || '')}`;
+  return String(objectPath || '').replace(`${uid}__`, `${uid}__${marker}__`);
+};
+const parseObjectName = (nameRaw: string) => {
+  const sep = nameRaw.indexOf('__');
+  const uid = sep > 0 ? nameRaw.slice(0, sep) : nameRaw;
+  const rest = sep > 0 ? nameRaw.slice(sep + 2) : '';
+  const markerMatch = rest.match(/^uploader_([A-Za-z0-9_-]+)_n_([A-Za-z0-9_-]*)__([\s\S]+)$/);
+  if (!markerMatch) return { uid, originalName: rest || nameRaw, uploaderId: '', uploaderName: '' };
+  return {
+    uid,
+    uploaderId: decodeUserSegment(markerMatch[1]),
+    uploaderName: decodeUserSegment(markerMatch[2]),
+    originalName: markerMatch[3] || nameRaw,
+  };
 };
 
 export default async function handler(req: any, res: any) {
@@ -90,7 +118,10 @@ export default async function handler(req: any, res: any) {
         return respond(res, 200, { ok: true });
       }
 
-      const rec = await local.storeFileFromDataUrl(body);
+      const rec = await local.storeFileFromDataUrl(body, {
+        user_id: parseUserId(req),
+        user_name: parseUserName(req),
+      });
       idx.records[rec.uid] = rec;
       await local.writeIndex(idx);
       const token = local.createOneTimeToken(rec.uid);
@@ -104,6 +135,8 @@ export default async function handler(req: any, res: any) {
         size: rec.size,
         sha256: rec.sha256,
         stored_path: rec.stored_path,
+        uploader_id: rec.uploader_id || '',
+        uploader_name: rec.uploader_name || '',
         download_url: `/api/ai/files-download?uid=${encodeURIComponent(rec.uid)}&token=${encodeURIComponent(token)}`,
         token_expires_in: 600,
       });
@@ -125,9 +158,9 @@ export default async function handler(req: any, res: any) {
         .filter((it: any) => it && !it.id?.endsWith('/'))
         .map((it: any) => {
           const nameRaw = String(it.name || '');
-          const sep = nameRaw.indexOf('__');
-          const uid = sep > 0 ? nameRaw.slice(0, sep) : nameRaw;
-          const originalName = sep > 0 ? nameRaw.slice(sep + 2) : nameRaw;
+          const parsedName = parseObjectName(nameRaw);
+          const uid = parsedName.uid;
+          const originalName = parsedName.originalName;
           const objectPath = `${prefix}${nameRaw}`;
           const mimeType = String(it?.metadata?.mimetype || 'application/octet-stream');
           const size = Number(it?.metadata?.size || 0);
@@ -149,6 +182,8 @@ export default async function handler(req: any, res: any) {
             size,
             stored_path: `supabase://${objectPath}`,
             object_path: objectPath,
+            uploader_id: parsedName.uploaderId || '',
+            uploader_name: parsedName.uploaderName || '',
             created_at: createdAt,
             download_url: `/api/ai/files-download?t=${encodeURIComponent(token)}`,
             token_expires_in: 600,
@@ -184,7 +219,10 @@ export default async function handler(req: any, res: any) {
 
     const uid = randomUUID();
     const sha256 = createHash('sha256').update(bytes).digest('hex');
-    const objectPath = getSupabaseObjectPath(moduleName, ownerId, folder, uid, fileName);
+    const requesterId = parseUserId(req);
+    const requesterName = parseUserName(req);
+    const baseObjectPath = getSupabaseObjectPath(moduleName, ownerId, folder, uid, fileName);
+    const objectPath = injectUploaderIntoObjectPath(baseObjectPath, uid, requesterId, requesterName);
     await uploadToSupabaseStorage(objectPath, bytes, mimeType);
     const token = createDownloadToken({
       uid,
@@ -204,6 +242,8 @@ export default async function handler(req: any, res: any) {
       sha256,
       stored_path: `supabase://${objectPath}`,
       object_path: objectPath,
+      uploader_id: requesterId || '',
+      uploader_name: requesterName || '',
       download_url: `/api/ai/files-download?t=${encodeURIComponent(token)}`,
       token_expires_in: 600,
     });

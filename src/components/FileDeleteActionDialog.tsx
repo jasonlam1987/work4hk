@@ -20,15 +20,40 @@ const FileDeleteActionDialog: React.FC<Props> = ({
   onSubmitRequest,
 }) => {
   const [confirmText, setConfirmText] = useState('');
+  const [reasonType, setReasonType] = useState<'upload_error' | 'other'>('upload_error');
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const superAdmin = useMemo(() => isSuperAdmin(), [isOpen]);
 
   const canDelete = superAdmin && confirmText.trim().toUpperCase() === 'DELETE';
-  const canRequest = !superAdmin && reason.trim().length >= 3;
+  const finalReason = reasonType === 'upload_error' ? '錯誤上傳' : reason.trim();
+  const canRequest = !superAdmin && (reasonType === 'upload_error' || reason.trim().length >= 3);
+
+  const handleConfirmDelete = async () => {
+    if (!canDelete || !context || busy) return;
+    setBusy(true);
+    try {
+      await onConfirmPermanentDelete(context);
+      closeAndReset();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSubmitRequest = async () => {
+    if (!canRequest || !context || busy) return;
+    setBusy(true);
+    try {
+      await onSubmitRequest(context, finalReason);
+      closeAndReset();
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const closeAndReset = () => {
     setConfirmText('');
+    setReasonType('upload_error');
     setReason('');
     setBusy(false);
     onClose();
@@ -58,6 +83,11 @@ const FileDeleteActionDialog: React.FC<Props> = ({
               <input
                 value={confirmText}
                 onChange={(e) => setConfirmText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key !== 'Enter') return;
+                  e.preventDefault();
+                  handleConfirmDelete();
+                }}
                 className="mt-1 w-full px-3 py-2 border rounded-lg"
                 placeholder="DELETE"
               />
@@ -66,12 +96,42 @@ const FileDeleteActionDialog: React.FC<Props> = ({
           ) : (
             <div>
               <label className="text-sm font-medium text-gray-700">刪除理由（必填）</label>
-              <textarea
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                className="mt-1 w-full px-3 py-2 border rounded-lg min-h-24"
-                placeholder="請填寫刪除理由"
-              />
+              <div className="mt-1 space-y-2">
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="radio"
+                    name="delete-reason-type"
+                    checked={reasonType === 'upload_error'}
+                    onChange={() => setReasonType('upload_error')}
+                  />
+                  <span>錯誤上傳</span>
+                </label>
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="radio"
+                    name="delete-reason-type"
+                    checked={reasonType === 'other'}
+                    onChange={() => setReasonType('other')}
+                  />
+                  <span>其他（自行輸入）</span>
+                </label>
+              </div>
+              {reasonType === 'other' && (
+                <>
+                  <textarea
+                    value={reason}
+                    onChange={(e) => setReason(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (!(e.ctrlKey || e.metaKey) || e.key !== 'Enter') return;
+                      e.preventDefault();
+                      handleSubmitRequest();
+                    }}
+                    className="mt-2 w-full px-3 py-2 border rounded-lg min-h-24"
+                    placeholder="請填寫刪除理由"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">可用 Ctrl+Enter 快速提交</p>
+                </>
+              )}
             </div>
           )}
 
@@ -87,16 +147,7 @@ const FileDeleteActionDialog: React.FC<Props> = ({
             {superAdmin ? (
               <button
                 type="button"
-                onClick={async () => {
-                  if (!canDelete || !context) return;
-                  setBusy(true);
-                  try {
-                    await onConfirmPermanentDelete(context);
-                    closeAndReset();
-                  } finally {
-                    setBusy(false);
-                  }
-                }}
+                onClick={handleConfirmDelete}
                 disabled={!canDelete || busy}
                 className="px-4 py-2 rounded-lg bg-red-600 text-white disabled:opacity-50"
               >
@@ -105,16 +156,7 @@ const FileDeleteActionDialog: React.FC<Props> = ({
             ) : (
               <button
                 type="button"
-                onClick={async () => {
-                  if (!canRequest || !context) return;
-                  setBusy(true);
-                  try {
-                    await onSubmitRequest(context, reason.trim());
-                    closeAndReset();
-                  } finally {
-                    setBusy(false);
-                  }
-                }}
+                onClick={handleSubmitRequest}
                 disabled={!canRequest || busy}
                 className="px-4 py-2 rounded-lg bg-apple-blue text-white disabled:opacity-50"
               >
