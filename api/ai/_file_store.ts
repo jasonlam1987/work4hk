@@ -2,6 +2,12 @@ import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { ensureStorageReady, getStoragePaths } from './_storage_root';
+import {
+  getSupabaseObjectPath,
+  isSupabaseStorageEnabled,
+  removeFromSupabaseStorage,
+  uploadToSupabaseStorage,
+} from './_supabase_storage';
 
 export const MAX_SIZE = 10 * 1024 * 1024;
 export const ALLOWED = new Set(['application/pdf', 'image/jpeg', 'image/png']);
@@ -26,6 +32,8 @@ export type FileRecord = {
   sha256: string;
   stored_name: string;
   stored_path: string;
+  storage_backend?: 'local' | 'supabase';
+  storage_object_path?: string;
   created_at: string;
   deleted_at?: string;
 };
@@ -206,6 +214,10 @@ const safeUnlink = async (p: string) => {
 };
 
 export const deletePhysicalFileAndArtifacts = async (rec: FileRecord) => {
+  if (rec.storage_backend === 'supabase' && rec.storage_object_path) {
+    await removeFromSupabaseStorage(rec.storage_object_path).catch(() => undefined);
+    return;
+  }
   await safeUnlink(rec.stored_path);
   const tmpCandidates = [
     path.join(TMP_DIR, `${rec.uid}.tmp`),
@@ -271,7 +283,14 @@ export const storeFileFromDataUrl = async (body: any) => {
     await fs.unlink(tmpPath).catch(() => undefined);
     throw new Error('temp file verify failed');
   }
-  await fs.rename(tmpPath, finalPath);
+  const useSupabase = isSupabaseStorageEnabled();
+  const objectPath = useSupabase ? getSupabaseObjectPath(moduleName, ownerId, uid, fileName) : '';
+  if (useSupabase) {
+    await uploadToSupabaseStorage(objectPath, bytes, mimeType);
+    await fs.unlink(tmpPath).catch(() => undefined);
+  } else {
+    await fs.rename(tmpPath, finalPath);
+  }
 
   const rec: FileRecord = {
     uid,
@@ -283,7 +302,9 @@ export const storeFileFromDataUrl = async (body: any) => {
     size: bytes.length,
     sha256,
     stored_name: storedName,
-    stored_path: finalPath,
+    stored_path: useSupabase ? `supabase://${objectPath}` : finalPath,
+    storage_backend: useSupabase ? 'supabase' : 'local',
+    storage_object_path: useSupabase ? objectPath : undefined,
     created_at: new Date().toISOString(),
   };
   return rec;

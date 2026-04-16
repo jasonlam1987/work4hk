@@ -1,5 +1,6 @@
 import { createReadStream } from 'node:fs';
 import { ensureDirs, readIndex, respond, verifyOneTimeToken, verifyRole, writeIndex } from './_file_store';
+import { downloadFromSupabaseStorage } from './_supabase_storage';
 
 export default async function handler(req: any, res: any) {
   if (!verifyRole(req)) return respond(res, 403, { code: 'FORBIDDEN', error: 'forbidden' });
@@ -24,6 +25,12 @@ export default async function handler(req: any, res: any) {
     res.statusCode = 200;
     res.setHeader('Content-Type', String(rec.mime_type || 'application/octet-stream'));
     res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(String(rec.original_name || rec.stored_name || 'file'))}`);
+    if (rec.storage_backend === 'supabase' && rec.storage_object_path) {
+      const bytes = await downloadFromSupabaseStorage(rec.storage_object_path);
+      res.setHeader('Content-Length', String(bytes.length));
+      res.end(bytes);
+      return;
+    }
     res.setHeader('Content-Length', String(rec.size || 0));
     const stream = createReadStream(rec.stored_path);
     stream.on('error', () => {
