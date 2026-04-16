@@ -3,13 +3,17 @@ import { Plus, Search, Edit2, Loader2, RefreshCw, UploadCloud, Trash2, FolderOpe
 import { Employer, getEmployers, createEmployer, updateEmployer, EmployerCreate, deleteEmployer } from '../api/employers';
 import Modal from '../components/Modal';
 import clsx from 'clsx';
+import { deleteManagedFile, downloadManagedFile, listManagedFiles, MAX_UPLOAD_SIZE, uploadManagedFile } from '../api/files';
 
 interface StoredFile {
   id: string;
+  uid: string;
   employerId: number;
   folder: string;
   name: string;
   size: number;
+  mimeType?: string;
+  downloadUrl?: string;
   uploadTime: string;
 }
 
@@ -56,6 +60,10 @@ const Employers: React.FC = () => {
   const [activeFolder, setActiveFolder] = useState<string>(FOLDERS[0]);
   const [storedFiles, setStoredFiles] = useState<StoredFile[]>([]);
   const uploadInputRef = useRef<HTMLInputElement>(null);
+  const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
+  const [uploadEta, setUploadEta] = useState<Record<string, number | null>>({});
+  const [uploadErrors, setUploadErrors] = useState<Record<string, string>>({});
+  const [pendingRetry, setPendingRetry] = useState<Record<string, File>>({});
 
   useEffect(() => {
     const files = localStorage.getItem('mock_employer_files');
@@ -63,6 +71,23 @@ const Employers: React.FC = () => {
       setStoredFiles(JSON.parse(files));
     }
   }, []);
+
+  useEffect(() => {
+    if (!isFileModalOpen || !selectedEmployerForFiles) return;
+    listManagedFiles('employers', selectedEmployerForFiles.id, activeFolder).then(items => {
+      setStoredFiles(items.map(it => ({
+        id: `${it.uid}`,
+        uid: it.uid,
+        employerId: selectedEmployerForFiles.id,
+        folder: it.folder,
+        name: it.original_name,
+        size: it.size,
+        mimeType: it.mime_type,
+        downloadUrl: it.download_url,
+        uploadTime: it.created_at ? new Date(it.created_at).toLocaleString() : new Date().toLocaleString(),
+      })));
+    }).catch(() => undefined);
+  }, [isFileModalOpen, selectedEmployerForFiles, activeFolder]);
 
   useEffect(() => {
     const raw = localStorage.getItem(EMPLOYERS_CACHE_KEY);
@@ -96,26 +121,69 @@ const Employers: React.FC = () => {
     setSelectedEmployerForFiles(employer);
     setActiveFolder(FOLDERS[0]);
     setIsFileModalOpen(true);
+    listManagedFiles('employers', employer.id, FOLDERS[0]).then(items => {
+      const mapped = items.map(it => ({
+        id: `${it.uid}`,
+        uid: it.uid,
+        employerId: employer.id,
+        folder: it.folder,
+        name: it.original_name,
+        size: it.size,
+        mimeType: it.mime_type,
+        downloadUrl: it.download_url,
+        uploadTime: it.created_at ? new Date(it.created_at).toLocaleString() : new Date().toLocaleString(),
+      }));
+      setStoredFiles(mapped);
+    }).catch(() => undefined);
+  };
+
+  const doUpload = async (file: File) => {
+    if (!selectedEmployerForFiles) return;
+    if (file.size > MAX_UPLOAD_SIZE) {
+      alert('檔案大小超過 10 MB，請壓縮後再上傳');
+      return;
+    }
+    const key = `${file.name}-${file.size}-${Date.now()}`;
+    setUploadProgress(prev => ({ ...prev, [key]: 0 }));
+    setUploadErrors(prev => ({ ...prev, [key]: '' }));
+    try {
+      const saved = await uploadManagedFile({
+        module: 'employers',
+        owner_id: selectedEmployerForFiles.id,
+        folder: activeFolder,
+        file,
+        retries: 1,
+        onProgress: ({ percent, remainingSeconds }) => {
+          setUploadProgress(prev => ({ ...prev, [key]: percent }));
+          setUploadEta(prev => ({ ...prev, [key]: remainingSeconds }));
+        },
+      });
+      const newFile: StoredFile = {
+        id: saved.uid,
+        uid: saved.uid,
+        employerId: selectedEmployerForFiles.id,
+        folder: activeFolder,
+        name: saved.original_name,
+        size: saved.size,
+        mimeType: saved.mime_type,
+        downloadUrl: saved.download_url,
+        uploadTime: new Date().toLocaleString(),
+      };
+      setStoredFiles(prev => [newFile, ...prev]);
+      alert(`上傳成功：${saved.original_name}`);
+    } catch (err: any) {
+      const message = String(err?.response?.data?.error || err?.message || '上傳失敗');
+      setUploadErrors(prev => ({ ...prev, [key]: message }));
+      setPendingRetry(prev => ({ ...prev, [key]: file }));
+    } finally {
+      setUploadProgress(prev => ({ ...prev, [key]: 100 }));
+    }
   };
 
   const handleUploadFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !selectedEmployerForFiles) return;
-
-    const newFile: StoredFile = {
-      id: Date.now().toString(),
-      employerId: selectedEmployerForFiles.id,
-      folder: activeFolder,
-      name: file.name,
-      size: file.size,
-      uploadTime: new Date().toLocaleString()
-    };
-
-    setStoredFiles(prev => {
-      const next = [...prev, newFile];
-      localStorage.setItem('mock_employer_files', JSON.stringify(next));
-      return next;
-    });
+    doUpload(file);
 
     if (uploadInputRef.current) {
       uploadInputRef.current.value = '';
@@ -123,23 +191,19 @@ const Employers: React.FC = () => {
   };
 
   const handleDownloadFile = (file: StoredFile) => {
-    // 模擬下載，產生一個假檔案
-    const blob = new Blob([`這是一個模擬下載的檔案。\n檔名：${file.name}\n大小：${file.size} bytes\n上傳時間：${file.uploadTime}\n所屬資料夾：${file.folder}`], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = file.name;
-    a.click();
-    URL.revokeObjectURL(url);
+    if (!file.downloadUrl) return alert('下載連結不存在，請重新上傳');
+    downloadManagedFile(file.downloadUrl, file.name).catch((err: any) => {
+      alert(String(err?.response?.data?.error || err?.message || '下載失敗'));
+    });
   };
 
   const handleDeleteFile = (id: string) => {
     if (!window.confirm('確定要刪除這個檔案嗎？')) return;
-    setStoredFiles(prev => {
-      const next = prev.filter(f => f.id !== id);
-      localStorage.setItem('mock_employer_files', JSON.stringify(next));
-      return next;
-    });
+    const target = storedFiles.find(f => f.id === id);
+    if (target?.uid) {
+      deleteManagedFile(target.uid).catch(() => undefined);
+    }
+    setStoredFiles(prev => prev.filter(f => f.id !== id));
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -756,6 +820,35 @@ const Employers: React.FC = () => {
 
             {/* File List */}
             <div className="flex-1 overflow-y-auto p-4">
+              {Object.keys(uploadProgress).length > 0 && (
+                <div className="mb-3 space-y-2">
+                  {Object.entries(uploadProgress).map(([k, v]) => (
+                    <div key={k} className="p-2 border border-gray-200 rounded bg-gray-50">
+                      <div className="flex justify-between text-xs text-gray-600">
+                        <span className="truncate max-w-[70%]">{k}</span>
+                        <span>{Math.round(v)}%{uploadEta[k] && uploadEta[k]! > 0 ? ` · 剩餘 ${uploadEta[k]} 秒` : ''}</span>
+                      </div>
+                      <div className="h-2 bg-gray-200 rounded mt-1 overflow-hidden">
+                        <div className="h-2 bg-apple-blue" style={{ width: `${v}%` }} />
+                      </div>
+                      {uploadErrors[k] && (
+                        <div className="flex items-center justify-between mt-1">
+                          <span className="text-xs text-red-600">{uploadErrors[k]}</span>
+                          {pendingRetry[k] && (
+                            <button
+                              type="button"
+                              className="text-xs px-2 py-0.5 rounded bg-red-50 text-red-700 hover:bg-red-100"
+                              onClick={() => doUpload(pendingRetry[k])}
+                            >
+                              重試
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
               {storedFiles.filter(f => f.employerId === selectedEmployerForFiles?.id && f.folder === activeFolder).length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-gray-400 space-y-3">
                   <FolderOpen className="w-12 h-12 text-gray-300" />

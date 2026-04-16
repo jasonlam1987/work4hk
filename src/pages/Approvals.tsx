@@ -5,13 +5,17 @@ import { Employer, getEmployers } from '../api/employers';
 import { Partner, getPartners } from '../api/settings';
 import Modal from '../components/Modal';
 import clsx from 'clsx';
+import { deleteManagedFile, downloadManagedFile, listManagedFiles, MAX_UPLOAD_SIZE, uploadManagedFile } from '../api/files';
 
 interface StoredApprovalFile {
   id: string;
+  uid: string;
   approvalId: number;
   folder: string;
   name: string;
   size: number;
+  mimeType?: string;
+  downloadUrl?: string;
   uploadTime: string;
 }
 
@@ -75,6 +79,10 @@ const Approvals: React.FC = () => {
   const [activeFolder, setActiveFolder] = useState<string>(APPROVAL_FOLDERS[0]);
   const [storedFiles, setStoredFiles] = useState<StoredApprovalFile[]>([]);
   const uploadInputRef = useRef<HTMLInputElement>(null);
+  const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
+  const [uploadEta, setUploadEta] = useState<Record<string, number | null>>({});
+  const [uploadErrors, setUploadErrors] = useState<Record<string, string>>({});
+  const [pendingRetry, setPendingRetry] = useState<Record<string, File>>({});
 
   const [employers, setEmployers] = useState<Employer[]>([]);
   const [partners, setPartners] = useState<Partner[]>([]);
@@ -180,6 +188,23 @@ const Approvals: React.FC = () => {
       }
     }
   }, []);
+
+  useEffect(() => {
+    if (!isFileModalOpen || !selectedApprovalForFiles) return;
+    listManagedFiles('approvals', selectedApprovalForFiles.id, activeFolder).then(items => {
+      setStoredFiles(items.map(it => ({
+        id: it.uid,
+        uid: it.uid,
+        approvalId: selectedApprovalForFiles.id,
+        folder: it.folder,
+        name: it.original_name,
+        size: it.size,
+        mimeType: it.mime_type,
+        downloadUrl: it.download_url,
+        uploadTime: it.created_at ? new Date(it.created_at).toLocaleString() : new Date().toLocaleString(),
+      })));
+    }).catch(() => undefined);
+  }, [isFileModalOpen, selectedApprovalForFiles, activeFolder]);
 
   useEffect(() => {
     const raw = localStorage.getItem(APPROVALS_CACHE_KEY);
@@ -418,53 +443,86 @@ const Approvals: React.FC = () => {
     setSelectedApprovalForFiles(approval);
     setActiveFolder(APPROVAL_FOLDERS[0]);
     setIsFileModalOpen(true);
+    listManagedFiles('approvals', approval.id, APPROVAL_FOLDERS[0]).then(items => {
+      setStoredFiles(items.map(it => ({
+        id: it.uid,
+        uid: it.uid,
+        approvalId: approval.id,
+        folder: it.folder,
+        name: it.original_name,
+        size: it.size,
+        mimeType: it.mime_type,
+        downloadUrl: it.download_url,
+        uploadTime: it.created_at ? new Date(it.created_at).toLocaleString() : new Date().toLocaleString(),
+      })));
+    }).catch(() => undefined);
   };
 
   const writeStoredFiles = (items: StoredApprovalFile[]) => {
     setStoredFiles(items);
-    localStorage.setItem('mock_approval_files', JSON.stringify(items));
+  };
+
+  const doUpload = async (file: File) => {
+    if (!selectedApprovalForFiles) return;
+    if (file.size > MAX_UPLOAD_SIZE) {
+      alert('檔案大小超過 10 MB，請壓縮後再上傳');
+      return;
+    }
+    const key = `${file.name}-${file.size}-${Date.now()}`;
+    setUploadProgress(prev => ({ ...prev, [key]: 0 }));
+    setUploadErrors(prev => ({ ...prev, [key]: '' }));
+    try {
+      const saved = await uploadManagedFile({
+        module: 'approvals',
+        owner_id: selectedApprovalForFiles.id,
+        folder: activeFolder,
+        file,
+        retries: 1,
+        onProgress: ({ percent, remainingSeconds }) => {
+          setUploadProgress(prev => ({ ...prev, [key]: percent }));
+          setUploadEta(prev => ({ ...prev, [key]: remainingSeconds }));
+        },
+      });
+      const row: StoredApprovalFile = {
+        id: saved.uid,
+        uid: saved.uid,
+        approvalId: selectedApprovalForFiles.id,
+        folder: activeFolder,
+        name: saved.original_name,
+        size: saved.size,
+        mimeType: saved.mime_type,
+        downloadUrl: saved.download_url,
+        uploadTime: new Date().toLocaleString(),
+      };
+      writeStoredFiles([row, ...storedFiles]);
+      alert(`上傳成功：${saved.original_name}`);
+    } catch (err: any) {
+      const message = String(err?.response?.data?.error || err?.message || '上傳失敗');
+      setUploadErrors(prev => ({ ...prev, [key]: message }));
+      setPendingRetry(prev => ({ ...prev, [key]: file }));
+    } finally {
+      setUploadProgress(prev => ({ ...prev, [key]: 100 }));
+    }
   };
 
   const handleUploadFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !selectedApprovalForFiles) return;
-
-    const newFile: StoredApprovalFile = {
-      id: Date.now().toString(),
-      approvalId: selectedApprovalForFiles.id,
-      folder: activeFolder,
-      name: file.name,
-      size: file.size,
-      uploadTime: new Date().toLocaleString(),
-    };
-
-    writeStoredFiles([...storedFiles, newFile]);
-
-    if (uploadInputRef.current) {
-      uploadInputRef.current.value = '';
-    }
+    doUpload(file);
+    if (uploadInputRef.current) uploadInputRef.current.value = '';
   };
 
   const handleDownloadFile = (file: StoredApprovalFile) => {
-    const approvalNo = String(selectedApprovalForFiles?.approval_number || '').toUpperCase();
-    const blob = new Blob([
-      `這是一個模擬下載的檔案。\n` +
-        `批文編號：${approvalNo}\n` +
-        `檔名：${file.name}\n` +
-        `大小：${file.size} bytes\n` +
-        `上傳時間：${file.uploadTime}\n` +
-        `所屬資料夾：${file.folder}`
-    ], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = file.name;
-    a.click();
-    URL.revokeObjectURL(url);
+    if (!file.downloadUrl) return alert('下載連結不存在，請重新上傳');
+    downloadManagedFile(file.downloadUrl, file.name).catch((err: any) => {
+      alert(String(err?.response?.data?.error || err?.message || '下載失敗'));
+    });
   };
 
   const handleDeleteFile = (id: string) => {
     if (!window.confirm('確定要刪除這個檔案嗎？刪除後無法回復。')) return;
+    const rec = storedFiles.find(f => f.id === id);
+    if (rec?.uid) deleteManagedFile(rec.uid).catch(() => undefined);
     writeStoredFiles(storedFiles.filter(f => f.id !== id));
   };
 
@@ -971,6 +1029,35 @@ const Approvals: React.FC = () => {
             </div>
 
             <div className="flex-1 overflow-y-auto p-4">
+              {Object.keys(uploadProgress).length > 0 && (
+                <div className="mb-3 space-y-2">
+                  {Object.entries(uploadProgress).map(([k, v]) => (
+                    <div key={k} className="p-2 border border-gray-200 rounded bg-gray-50">
+                      <div className="flex justify-between text-xs text-gray-600">
+                        <span className="truncate max-w-[70%]">{k}</span>
+                        <span>{Math.round(v)}%{uploadEta[k] && uploadEta[k]! > 0 ? ` · 剩餘 ${uploadEta[k]} 秒` : ''}</span>
+                      </div>
+                      <div className="h-2 bg-gray-200 rounded mt-1 overflow-hidden">
+                        <div className="h-2 bg-apple-blue" style={{ width: `${v}%` }} />
+                      </div>
+                      {uploadErrors[k] && (
+                        <div className="flex items-center justify-between mt-1">
+                          <span className="text-xs text-red-600">{uploadErrors[k]}</span>
+                          {pendingRetry[k] && (
+                            <button
+                              type="button"
+                              className="text-xs px-2 py-0.5 rounded bg-red-50 text-red-700 hover:bg-red-100"
+                              onClick={() => doUpload(pendingRetry[k])}
+                            >
+                              重試
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
               {storedFiles.filter(f => f.approvalId === selectedApprovalForFiles?.id && f.folder === activeFolder).length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-gray-400 space-y-3">
                   <FolderOpen className="w-12 h-12 text-gray-300" />

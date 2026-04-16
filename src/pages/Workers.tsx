@@ -7,13 +7,14 @@ import { Employer, getEmployers } from '../api/employers';
 import { Approval, getApprovals, getApprovalQuotaDetails, QuotaDetail } from '../api/approvals';
 import { WorkerEducation, WorkerProfile, WorkerWorkExperience, getWorkerProfile, setWorkerProfile } from '../utils/workerProfile';
 import { WorkerFileCategory, WorkerFileMeta, deleteWorkerFile, uploadWorkerFile } from '../api/workerFiles';
+import { downloadManagedFile, MAX_UPLOAD_SIZE } from '../api/files';
 import { PHONE_CODES, labourStatusOptions, labourStatusToApi, labourStatusToUi, normalizeDate, isMainlandId, isPhoneNumber, mergePhone, formatEmploymentMonths, parseEmploymentMonths } from '../utils/workersForm';
 
 const WORKERS_CACHE_KEY = 'cache_workers_list_v1';
 const EMPLOYERS_CACHE_KEY = 'cache_employers_list_v1';
 const APPROVALS_CACHE_KEY = 'cache_approvals_list_v1';
 const MAX_FILES_PER_CATEGORY = 10;
-const MAX_FILE_SIZE = 5 * 1024 * 1024;
+const MAX_FILE_SIZE = MAX_UPLOAD_SIZE;
 const ACCEPT_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png']);
 
 type FileTab = WorkerFileCategory;
@@ -27,6 +28,7 @@ interface StoredFile {
   name: string;
   size: number;
   mimeType: string;
+  downloadUrl?: string;
   uploadTime: string;
 }
 
@@ -82,6 +84,9 @@ const Workers: React.FC = () => {
   });
   const [uploadingCategory, setUploadingCategory] = useState<FileTab | null>(null);
   const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
+  const [uploadEta, setUploadEta] = useState<Record<string, number | null>>({});
+  const [uploadErrors, setUploadErrors] = useState<Record<string, string>>({});
+  const [pendingRetry, setPendingRetry] = useState<Record<string, File>>({});
   const [isFileModalOpen, setIsFileModalOpen] = useState(false);
   const [selectedWorkerForFiles, setSelectedWorkerForFiles] = useState<Worker | null>(null);
   const [storedFiles, setStoredFiles] = useState<StoredFile[]>([]);
@@ -312,14 +317,6 @@ const Workers: React.FC = () => {
     }
   };
 
-  const toBase64DataUrl = (file: File) =>
-    new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result || ''));
-      reader.onerror = () => reject(new Error('read file failed'));
-      reader.readAsDataURL(file);
-    });
-
   const openWorkerFiles = (worker: Worker) => {
     setSelectedWorkerForFiles(worker);
     setActiveFolder('證件資料');
@@ -338,7 +335,7 @@ const Workers: React.FC = () => {
         return;
       }
       if (f.size > MAX_FILE_SIZE) {
-        alert(`檔案超過 5MB：${f.name}`);
+        alert('檔案大小超過 10 MB，請壓縮後再上傳');
         return;
       }
     }
@@ -348,15 +345,19 @@ const Workers: React.FC = () => {
       for (const f of files) {
         const key = `${f.name}-${f.size}-${Date.now()}`;
         setUploadProgress(prev => ({ ...prev, [key]: 5 }));
-        const dataUrl = await toBase64DataUrl(f);
-        setUploadProgress(prev => ({ ...prev, [key]: 40 }));
+        setUploadErrors(prev => ({ ...prev, [key]: '' }));
         const saved: WorkerFileMeta = await uploadWorkerFile({
+          owner_id: workerId,
           category,
           file_name: f.name,
           mime_type: f.type,
-          data_url: dataUrl,
+          data_url: '',
+          file: f,
+          onProgress: ({ percent, remainingSeconds }) => {
+            setUploadProgress(prev => ({ ...prev, [key]: percent }));
+            setUploadEta(prev => ({ ...prev, [key]: remainingSeconds }));
+          },
         });
-        setUploadProgress(prev => ({ ...prev, [key]: 90 }));
 
         const folder = activeFolder;
         setStoredFiles(prev => [
@@ -368,14 +369,21 @@ const Workers: React.FC = () => {
             name: saved.original_name,
             size: saved.size,
             mimeType: saved.mime_type,
+            downloadUrl: (saved as any).download_url,
             uploadTime: new Date().toLocaleString(),
           },
           ...prev,
         ]);
         setUploadProgress(prev => ({ ...prev, [key]: 100 }));
+      setUploadEta(prev => ({ ...prev, [key]: 0 }));
       }
     } catch (err: any) {
-      alert(`檔案上傳失敗：${err?.response?.data?.error || err?.message || '未知錯誤'}`);
+      const msg = String(err?.response?.data?.error || err?.message || '未知錯誤');
+      setUploadErrors(prev => ({ ...prev, [`batch-${Date.now()}`]: msg }));
+      for (const f of files) {
+        const retryKey = `${f.name}-${f.size}`;
+        setPendingRetry(prev => ({ ...prev, [retryKey]: f }));
+      }
     } finally {
       setUploadingCategory(null);
       setTimeout(() => setUploadProgress({}), 600);
@@ -409,7 +417,13 @@ const Workers: React.FC = () => {
   };
 
   const handleDownloadStoredFile = (f: StoredFile) => {
-    alert(`目前示範模式，請到後端檔案服務下載：${f.name}`);
+    if (!f.downloadUrl) {
+      alert('下載連結不存在，請重新上傳後再試');
+      return;
+    }
+    downloadManagedFile(f.downloadUrl, f.name).catch((err: any) => {
+      alert(`下載失敗：${err?.response?.data?.error || err?.message || '未知錯誤'}`);
+    });
   };
 
   const handleOpenCreate = () => {
@@ -1587,12 +1601,33 @@ const Workers: React.FC = () => {
                   <div key={k}>
                     <div className="flex justify-between text-xs text-gray-600 mb-1">
                       <span className="truncate max-w-[70%]">{k}</span>
-                      <span>{Math.round(v)}%</span>
+                      <span>{Math.round(v)}%{uploadEta[k] && uploadEta[k]! > 0 ? ` · 剩餘 ${uploadEta[k]} 秒` : ''}</span>
                     </div>
                     <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
                       <div className="h-2 bg-apple-blue" style={{ width: `${v}%` }} />
                     </div>
                   </div>
+                ))}
+                {Object.entries(uploadErrors).map(([k, msg]) => (
+                  msg ? (
+                    <div key={`err-${k}`} className="p-2 rounded border border-red-200 bg-red-50 text-xs text-red-700 flex items-center justify-between">
+                      <span className="truncate max-w-[75%]">{msg}</span>
+                      {Object.keys(pendingRetry).length > 0 && (
+                        <button
+                          type="button"
+                          className="px-2 py-0.5 rounded bg-red-100 hover:bg-red-200"
+                          onClick={() => {
+                            const firstKey = Object.keys(pendingRetry)[0];
+                            const f = pendingRetry[firstKey];
+                            if (!selectedWorkerForFiles || !f) return;
+                            processUploadFiles([f], folderToCategory(activeFolder), selectedWorkerForFiles.id);
+                          }}
+                        >
+                          重試
+                        </button>
+                      )}
+                    </div>
+                  ) : null
                 ))}
               </div>
             )}
