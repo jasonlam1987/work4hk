@@ -19,6 +19,10 @@ const FileDeleteActionDialog: React.FC<Props> = ({
   onConfirmPermanentDelete,
   onSubmitRequest,
 }) => {
+  const getErrorMessage = (err: any, fallback: string) => {
+    const detail = err?.response?.data?.error || err?.response?.data?.detail || err?.message;
+    return String(detail || fallback);
+  };
   const [confirmText, setConfirmText] = useState('');
   const [reasonType, setReasonType] = useState<'upload_error' | 'other'>('upload_error');
   const [reason, setReason] = useState('');
@@ -35,6 +39,8 @@ const FileDeleteActionDialog: React.FC<Props> = ({
     try {
       await onConfirmPermanentDelete(context);
       closeAndReset();
+    } catch (err: any) {
+      alert(getErrorMessage(err, '刪除失敗'));
     } finally {
       setBusy(false);
     }
@@ -46,6 +52,8 @@ const FileDeleteActionDialog: React.FC<Props> = ({
     try {
       await onSubmitRequest(context, finalReason);
       closeAndReset();
+    } catch (err: any) {
+      alert(getErrorMessage(err, '申請刪除失敗'));
     } finally {
       setBusy(false);
     }

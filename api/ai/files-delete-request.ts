@@ -41,14 +41,12 @@ export default async function handler(req: any, res: any) {
     }
 
     const requesterId = parseUserId(req);
+    const requesterName = String(parseUserName(req) || '').trim().toLowerCase();
     const uploaderId = String((rec as any)?.uploader_id || '').trim();
-    if (!uploaderId) {
-      return respond(res, 403, {
-        code: 'UPLOADER_NOT_BOUND',
-        error: '此文件未綁定上傳者，請由超級管理員處理',
-      });
-    }
-    if (!requesterId || requesterId !== uploaderId) {
+    const uploaderName = String((rec as any)?.uploader_name || '').trim().toLowerCase();
+    const hasIdMatch = Boolean(requesterId && uploaderId && requesterId === uploaderId);
+    const hasNameMatch = Boolean(requesterName && uploaderName && requesterName === uploaderName);
+    if (!hasIdMatch && !hasNameMatch) {
       return respond(res, 403, {
         code: 'ONLY_UPLOADER_CAN_REQUEST_DELETE',
         error: '只有該文件上傳者可申請刪除',
