@@ -36,6 +36,7 @@ interface StoredFile {
   mimeType: string;
   downloadUrl?: string;
   storedPath?: string;
+  objectPath?: string;
   uploadTime: string;
 }
 
@@ -385,6 +386,7 @@ const Workers: React.FC = () => {
               mimeType: saved.mime_type,
               downloadUrl: (saved as any).download_url,
               storedPath: (saved as any).stored_path,
+              objectPath: (saved as any).object_path,
               uploadTime: new Date().toLocaleString(),
             },
             ...prev,
@@ -427,12 +429,13 @@ const Workers: React.FC = () => {
       sectionName: activeFolder,
       folder: activeFolder,
       storedPath: target.storedPath || '',
+      objectPath: target.objectPath || '',
     });
     setDeleteDialogOpen(true);
   };
 
   const confirmPermanentDelete = async (ctx: DeleteContext) => {
-    await permanentDeleteFile(ctx.uid, 'DELETE');
+    await permanentDeleteFile(ctx.uid, 'DELETE', ctx);
     setStoredFiles(prev => prev.filter(f => f.uid !== ctx.uid));
     alert('刪除完成');
   };

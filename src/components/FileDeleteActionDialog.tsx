@@ -50,7 +50,6 @@ const FileDeleteActionDialog: React.FC<Props> = ({
             <div><span className="font-medium">檔案名稱：</span>{context.fileName}</div>
             <div><span className="font-medium">所屬公司：</span>{context.companyName}</div>
             <div><span className="font-medium">板塊：</span>{context.sectionName}</div>
-            <div className="break-all"><span className="font-medium">存檔路徑：</span>{context.storedPath || '-'}</div>
           </div>
 
           {superAdmin ? (
@@ -62,6 +61,7 @@ const FileDeleteActionDialog: React.FC<Props> = ({
                 className="mt-1 w-full px-3 py-2 border rounded-lg"
                 placeholder="DELETE"
               />
+              <p className="mt-1 text-xs text-gray-500">輸入不分大小寫，前後空格會自動忽略</p>
             </div>
           ) : (
             <div>
@@ -100,7 +100,7 @@ const FileDeleteActionDialog: React.FC<Props> = ({
                 disabled={!canDelete || busy}
                 className="px-4 py-2 rounded-lg bg-red-600 text-white disabled:opacity-50"
               >
-                確認永久刪除
+                {busy ? '刪除中...' : '確認永久刪除'}
               </button>
             ) : (
               <button

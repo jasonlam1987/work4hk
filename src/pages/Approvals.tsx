@@ -23,6 +23,7 @@ interface StoredApprovalFile {
   mimeType?: string;
   downloadUrl?: string;
   storedPath?: string;
+  objectPath?: string;
   uploadTime: string;
 }
 
@@ -85,6 +86,7 @@ const Approvals: React.FC = () => {
   const [selectedApprovalForFiles, setSelectedApprovalForFiles] = useState<Approval | null>(null);
   const [activeFolder, setActiveFolder] = useState<string>(APPROVAL_FOLDERS[0]);
   const [storedFiles, setStoredFiles] = useState<StoredApprovalFile[]>([]);
+  const fileFolderCacheRef = useRef<Record<string, StoredApprovalFile[]>>({});
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteContext, setDeleteContext] = useState<DeleteContext | null>(null);
   const superAdmin = isSuperAdmin();
@@ -203,22 +205,41 @@ const Approvals: React.FC = () => {
     }
   }, []);
 
+  const mapManagedFiles = (ownerId: number, items: any[]): StoredApprovalFile[] =>
+    items.map((it) => ({
+      id: it.uid,
+      uid: it.uid,
+      approvalId: ownerId,
+      folder: it.folder,
+      name: it.original_name,
+      size: it.size,
+      mimeType: it.mime_type,
+      downloadUrl: it.download_url,
+      storedPath: (it as any).stored_path,
+      objectPath: (it as any).object_path,
+      uploadTime: it.created_at ? new Date(it.created_at).toLocaleString() : new Date().toLocaleString(),
+    }));
+
+  const folderCacheKey = (ownerId: number, folder: string) => `approvals:${ownerId}:${folder}`;
+
+  const loadFolderFiles = async (ownerId: number, folder: string, preferCache: boolean) => {
+    const cacheKey = folderCacheKey(ownerId, folder);
+    const cached = fileFolderCacheRef.current[cacheKey];
+    if (preferCache && cached) {
+      setStoredFiles(cached);
+    }
+    try {
+      const items = await listManagedFiles('approvals', ownerId, folder);
+      const mapped = mapManagedFiles(ownerId, items);
+      fileFolderCacheRef.current[cacheKey] = mapped;
+      setStoredFiles(mapped);
+    } catch {
+    }
+  };
+
   useEffect(() => {
     if (!isFileModalOpen || !selectedApprovalForFiles) return;
-    listManagedFiles('approvals', selectedApprovalForFiles.id, activeFolder).then(items => {
-      setStoredFiles(items.map(it => ({
-        id: it.uid,
-        uid: it.uid,
-        approvalId: selectedApprovalForFiles.id,
-        folder: it.folder,
-        name: it.original_name,
-        size: it.size,
-        mimeType: it.mime_type,
-        downloadUrl: it.download_url,
-        storedPath: (it as any).stored_path,
-        uploadTime: it.created_at ? new Date(it.created_at).toLocaleString() : new Date().toLocaleString(),
-      })));
-    }).catch(() => undefined);
+    loadFolderFiles(selectedApprovalForFiles.id, activeFolder, true);
   }, [isFileModalOpen, selectedApprovalForFiles, activeFolder]);
 
   useEffect(() => {
@@ -458,20 +479,10 @@ const Approvals: React.FC = () => {
     setSelectedApprovalForFiles(approval);
     setActiveFolder(APPROVAL_FOLDERS[0]);
     setIsFileModalOpen(true);
-    listManagedFiles('approvals', approval.id, APPROVAL_FOLDERS[0]).then(items => {
-      setStoredFiles(items.map(it => ({
-        id: it.uid,
-        uid: it.uid,
-        approvalId: approval.id,
-        folder: it.folder,
-        name: it.original_name,
-        size: it.size,
-        mimeType: it.mime_type,
-        downloadUrl: it.download_url,
-        storedPath: (it as any).stored_path,
-        uploadTime: it.created_at ? new Date(it.created_at).toLocaleString() : new Date().toLocaleString(),
-      })));
-    }).catch(() => undefined);
+    loadFolderFiles(approval.id, APPROVAL_FOLDERS[0], true);
+    APPROVAL_FOLDERS.slice(1).forEach((folder) => {
+      loadFolderFiles(approval.id, folder, false);
+    });
   };
 
   const writeStoredFiles = (items: StoredApprovalFile[]) => {
@@ -508,9 +519,13 @@ const Approvals: React.FC = () => {
         mimeType: saved.mime_type,
         downloadUrl: saved.download_url,
         storedPath: (saved as any).stored_path,
+        objectPath: (saved as any).object_path,
         uploadTime: new Date().toLocaleString(),
       };
-      writeStoredFiles([row, ...storedFiles]);
+      const cacheKey = folderCacheKey(selectedApprovalForFiles.id, activeFolder);
+      const nextRows = [row, ...(fileFolderCacheRef.current[cacheKey] || [])];
+      fileFolderCacheRef.current[cacheKey] = nextRows;
+      writeStoredFiles(nextRows);
       succeedTask(uploadScope, key);
       alert(`上傳成功：${saved.original_name}`);
     } catch (err: any) {
@@ -544,13 +559,17 @@ const Approvals: React.FC = () => {
       sectionName: activeFolder,
       folder: activeFolder,
       storedPath: rec.storedPath || '',
+      objectPath: rec.objectPath || '',
     });
     setDeleteDialogOpen(true);
   };
 
   const confirmPermanentDelete = async (ctx: DeleteContext) => {
-    await permanentDeleteFile(ctx.uid, 'DELETE');
-    writeStoredFiles(storedFiles.filter(f => f.uid !== ctx.uid));
+    await permanentDeleteFile(ctx.uid, 'DELETE', ctx);
+    const cacheKey = folderCacheKey(selectedApprovalForFiles?.id || 0, activeFolder);
+    const nextRows = (fileFolderCacheRef.current[cacheKey] || storedFiles).filter(f => f.uid !== ctx.uid);
+    fileFolderCacheRef.current[cacheKey] = nextRows;
+    writeStoredFiles(nextRows);
     alert('刪除完成');
   };
 

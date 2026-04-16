@@ -17,6 +17,7 @@ export type ManagedFile = {
   size: number;
   sha256?: string;
   stored_path?: string;
+  object_path?: string;
   download_url: string;
   token_expires_in?: number;
   created_at?: string;
@@ -137,16 +138,21 @@ export const normalizeDownloadUrl = (downloadUrl: string) => {
   return raw;
 };
 
+const toBrowserDownloadUrl = (downloadUrl: string) => {
+  const raw = String(downloadUrl || '').trim();
+  if (!raw) return raw;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith('/api/')) return raw;
+  if (raw.startsWith('/ai/')) return `/api${raw}`;
+  return raw.startsWith('/') ? raw : `/${raw}`;
+};
+
 export const downloadManagedFile = async (downloadUrl: string, fileName: string) => {
-  const res = await apiClient.get(normalizeDownloadUrl(downloadUrl), {
-    responseType: 'blob',
-    headers: { 'x-user-role': getUserRoleHeader() },
-  });
-  const blob = new Blob([res.data], { type: res.headers['content-type'] || 'application/octet-stream' });
-  const url = URL.createObjectURL(blob);
+  const url = toBrowserDownloadUrl(downloadUrl);
+  if (!url) throw new Error('下載連結不存在');
   const a = document.createElement('a');
   a.href = url;
   a.download = fileName;
+  a.rel = 'noopener';
   a.click();
-  URL.revokeObjectURL(url);
 };

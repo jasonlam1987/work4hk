@@ -21,6 +21,7 @@ interface StoredFile {
   mimeType?: string;
   downloadUrl?: string;
   storedPath?: string;
+  objectPath?: string;
   uploadTime: string;
 }
 
@@ -69,6 +70,7 @@ const Employers: React.FC = () => {
 
   const [activeFolder, setActiveFolder] = useState<string>(FOLDERS[0]);
   const [storedFiles, setStoredFiles] = useState<StoredFile[]>([]);
+  const fileFolderCacheRef = useRef<Record<string, StoredFile[]>>({});
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const uploadScope = `employers:${selectedEmployerForFiles?.id || 0}:${activeFolder}`;
   const tasksByScope = useUploadStore(s => s.tasksByScope);
@@ -89,22 +91,41 @@ const Employers: React.FC = () => {
     }
   }, []);
 
+  const mapManagedFiles = (ownerId: number, items: any[]): StoredFile[] =>
+    items.map((it) => ({
+      id: `${it.uid}`,
+      uid: it.uid,
+      employerId: ownerId,
+      folder: it.folder,
+      name: it.original_name,
+      size: it.size,
+      mimeType: it.mime_type,
+      downloadUrl: it.download_url,
+      storedPath: (it as any).stored_path,
+      objectPath: (it as any).object_path,
+      uploadTime: it.created_at ? new Date(it.created_at).toLocaleString() : new Date().toLocaleString(),
+    }));
+
+  const folderCacheKey = (ownerId: number, folder: string) => `employers:${ownerId}:${folder}`;
+
+  const loadFolderFiles = async (ownerId: number, folder: string, preferCache: boolean) => {
+    const cacheKey = folderCacheKey(ownerId, folder);
+    const cached = fileFolderCacheRef.current[cacheKey];
+    if (preferCache && cached) {
+      setStoredFiles(cached);
+    }
+    try {
+      const items = await listManagedFiles('employers', ownerId, folder);
+      const mapped = mapManagedFiles(ownerId, items);
+      fileFolderCacheRef.current[cacheKey] = mapped;
+      setStoredFiles(mapped);
+    } catch {
+    }
+  };
+
   useEffect(() => {
     if (!isFileModalOpen || !selectedEmployerForFiles) return;
-    listManagedFiles('employers', selectedEmployerForFiles.id, activeFolder).then(items => {
-      setStoredFiles(items.map(it => ({
-        id: `${it.uid}`,
-        uid: it.uid,
-        employerId: selectedEmployerForFiles.id,
-        folder: it.folder,
-        name: it.original_name,
-        size: it.size,
-        mimeType: it.mime_type,
-        downloadUrl: it.download_url,
-        storedPath: (it as any).stored_path,
-        uploadTime: it.created_at ? new Date(it.created_at).toLocaleString() : new Date().toLocaleString(),
-      })));
-    }).catch(() => undefined);
+    loadFolderFiles(selectedEmployerForFiles.id, activeFolder, true);
   }, [isFileModalOpen, selectedEmployerForFiles, activeFolder]);
 
   useEffect(() => {
@@ -139,21 +160,11 @@ const Employers: React.FC = () => {
     setSelectedEmployerForFiles(employer);
     setActiveFolder(FOLDERS[0]);
     setIsFileModalOpen(true);
-    listManagedFiles('employers', employer.id, FOLDERS[0]).then(items => {
-      const mapped = items.map(it => ({
-        id: `${it.uid}`,
-        uid: it.uid,
-        employerId: employer.id,
-        folder: it.folder,
-        name: it.original_name,
-        size: it.size,
-        mimeType: it.mime_type,
-        downloadUrl: it.download_url,
-        storedPath: (it as any).stored_path,
-        uploadTime: it.created_at ? new Date(it.created_at).toLocaleString() : new Date().toLocaleString(),
-      }));
-      setStoredFiles(mapped);
-    }).catch(() => undefined);
+    loadFolderFiles(employer.id, FOLDERS[0], true);
+    // Warm up other folders so switching tabs feels instant.
+    FOLDERS.slice(1).forEach((folder) => {
+      loadFolderFiles(employer.id, folder, false);
+    });
   };
 
   const doUpload = async (file: File) => {
@@ -186,9 +197,13 @@ const Employers: React.FC = () => {
         mimeType: saved.mime_type,
         downloadUrl: saved.download_url,
         storedPath: (saved as any).stored_path,
+        objectPath: (saved as any).object_path,
         uploadTime: new Date().toLocaleString(),
       };
-      setStoredFiles(prev => [newFile, ...prev]);
+      const cacheKey = folderCacheKey(selectedEmployerForFiles.id, activeFolder);
+      const nextFolderRows = [newFile, ...(fileFolderCacheRef.current[cacheKey] || [])];
+      fileFolderCacheRef.current[cacheKey] = nextFolderRows;
+      setStoredFiles(nextFolderRows);
       succeedTask(uploadScope, key);
       alert(`上傳成功：${saved.original_name}`);
     } catch (err: any) {
@@ -225,13 +240,17 @@ const Employers: React.FC = () => {
       sectionName: activeFolder,
       folder: activeFolder,
       storedPath: target.storedPath || '',
+      objectPath: target.objectPath || '',
     });
     setDeleteDialogOpen(true);
   };
 
   const confirmPermanentDelete = async (ctx: DeleteContext) => {
-    await permanentDeleteFile(ctx.uid, 'DELETE');
-    setStoredFiles(prev => prev.filter(f => f.uid !== ctx.uid));
+    await permanentDeleteFile(ctx.uid, 'DELETE', ctx);
+    const cacheKey = folderCacheKey(selectedEmployerForFiles?.id || 0, activeFolder);
+    const nextRows = (fileFolderCacheRef.current[cacheKey] || storedFiles).filter(f => f.uid !== ctx.uid);
+    fileFolderCacheRef.current[cacheKey] = nextRows;
+    setStoredFiles(nextRows);
     alert('刪除完成');
   };
 

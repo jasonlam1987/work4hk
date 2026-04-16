@@ -10,6 +10,7 @@ export type DeleteContext = {
   sectionName: string;
   folder: string;
   storedPath?: string;
+  objectPath?: string;
 };
 
 export type DeleteRequestRecord = {
@@ -47,12 +48,25 @@ const headersWithIdentity = async () => {
   };
 };
 
-export const permanentDeleteFile = async (uid: string, confirmText: string) => {
-  const res = await apiClient.post(
-    '/ai/files-delete',
-    { uid, confirm_text: confirmText },
-    { headers: await headersWithIdentity() }
-  );
+const objectPathFromContext = (ctx?: DeleteContext | null) => {
+  const direct = String(ctx?.objectPath || '').trim();
+  if (direct) return direct;
+  const raw = String(ctx?.storedPath || '').trim();
+  if (raw.startsWith('supabase://')) return raw.slice('supabase://'.length);
+  return '';
+};
+
+export const permanentDeleteFile = async (uid: string, confirmText: string, context?: DeleteContext | null) => {
+  const headers = await headersWithIdentity();
+  const objectPath = objectPathFromContext(context);
+  if (objectPath) {
+    const res = await apiClient.delete('/ai/files', {
+      data: { object_path: objectPath },
+      headers,
+    });
+    return res.data;
+  }
+  const res = await apiClient.post('/ai/files-delete', { uid, confirm_text: confirmText }, { headers });
   return res.data;
 };
 

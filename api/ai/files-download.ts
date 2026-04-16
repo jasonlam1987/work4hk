@@ -30,10 +30,12 @@ const parseToken = (token: string) => {
 };
 
 export default async function handler(req: any, res: any) {
-  if (!verifyRole(req)) return respond(res, 403, { code: 'FORBIDDEN', error: 'forbidden' });
   if (req.method !== 'GET') return respond(res, 405, { code: 'METHOD_NOT_ALLOWED', error: 'Method Not Allowed' });
 
   try {
+    const tokenInQuery = String(req?.query?.t || req?.query?.token || '').trim();
+    if (!tokenInQuery && !verifyRole(req)) return respond(res, 403, { code: 'FORBIDDEN', error: 'forbidden' });
+
     if (!isSupabaseStorageEnabled()) {
       if (process.env.VERCEL) {
         return respond(res, 500, {
