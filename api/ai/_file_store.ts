@@ -51,6 +51,7 @@ export type DeleteRequestStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 
 export type FileDeleteRequest = {
   request_id: string;
+  approval_no?: string;
   uid: string;
   module: FileRecord['module'];
   owner_id: number;
@@ -190,6 +191,7 @@ export const appendAuditLog = (idx: FileIndex, log: Omit<FileAuditLog, 'id' | 'c
 
 export const createDeleteRequestRecord = (input: {
   rec: FileRecord;
+  approval_no?: string;
   reason: string;
   requester_id: string;
   requester_account?: string;
@@ -200,6 +202,7 @@ export const createDeleteRequestRecord = (input: {
   const requestId = randomUUID();
   const out: FileDeleteRequest = {
     request_id: requestId,
+    approval_no: String(input.approval_no || '').trim(),
     uid: input.rec.uid,
     module: input.rec.module,
     owner_id: input.rec.owner_id,

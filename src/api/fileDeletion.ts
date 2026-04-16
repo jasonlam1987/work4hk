@@ -18,6 +18,7 @@ export type DeleteContext = {
 
 export type DeleteRequestRecord = {
   request_id: string;
+  approval_no?: string;
   uid: string;
   request_type?: 'DELETE_ATTACHMENT';
   module: FileModule;

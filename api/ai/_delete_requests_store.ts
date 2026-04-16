@@ -10,6 +10,7 @@ export type DeleteRequestStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 
 export type StoredDeleteRequest = {
   request_id: string;
+  approval_no?: string;
   uid: string;
   request_type?: 'DELETE_ATTACHMENT';
   module: 'employers' | 'approvals' | 'workers';
@@ -42,6 +43,7 @@ const normalize = (row: any): StoredDeleteRequest | null => {
   if (!requestId) return null;
   return {
     request_id: requestId,
+    approval_no: String(row.approval_no || '').trim(),
     uid: String(row.uid || '').trim(),
     request_type: 'DELETE_ATTACHMENT',
     module: String(row.module || '') as any,
@@ -66,6 +68,25 @@ const normalize = (row: any): StoredDeleteRequest | null => {
 };
 
 export const createRequestId = () => randomUUID();
+
+export const createDeleteApprovalNumber = async (fallbackMap?: Record<string, any>) => {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  const day = `${y}${m}${d}`;
+  const rows = await listDeleteRequestsFromStore(fallbackMap);
+  let maxSeq = 0;
+  for (const row of rows) {
+    const v = String(row.approval_no || '');
+    const match = v.match(new RegExp(`^DAR-${day}-(\\d{4})$`));
+    if (!match) continue;
+    const n = Number(match[1] || '0');
+    if (n > maxSeq) maxSeq = n;
+  }
+  const next = String(maxSeq + 1).padStart(4, '0');
+  return `DAR-${day}-${next}`;
+};
 
 export const listDeleteRequestsFromStore = async (fallbackMap?: Record<string, any>) => {
   if (!isSupabaseStorageEnabled()) {

@@ -152,4 +152,32 @@ describe('file delete security flow', () => {
     expect(idx.records[uid]?.deleted_at).toBeUndefined();
     expect(idx.delete_requests[requestId]?.status).toBe('REJECTED');
   });
+
+  it('rejected request is treated as done and cannot be reviewed again', async () => {
+    await ensureDirs();
+    await writeIndex({ records: {}, used_tokens: {}, delete_requests: {}, audit_logs: [] });
+    const uid = await makeFile();
+
+    const createReq = makeReq(
+      'POST',
+      { uid, reason: '錯誤上傳', company_name: 'A 公司', section_name: '企業資料' },
+      roleHeaders('manager')
+    );
+    const createRes = makeRes();
+    await filesDeleteRequestHandler(createReq, createRes);
+    const created = JSON.parse(String(createRes.state.body || '{}'));
+    const requestId = created?.request?.request_id;
+
+    const rejectReq = makeReq('POST', { request_id: requestId, action: 'REJECT' }, roleHeaders('super_admin'));
+    const rejectRes = makeRes();
+    await filesDeleteReviewHandler(rejectReq, rejectRes);
+    expect(rejectRes.statusCode).toBe(200);
+
+    const secondReviewReq = makeReq('POST', { request_id: requestId, action: 'APPROVE' }, roleHeaders('super_admin'));
+    const secondReviewRes = makeRes();
+    await filesDeleteReviewHandler(secondReviewReq, secondReviewRes);
+    const secondReview = JSON.parse(String(secondReviewRes.state.body || '{}'));
+    expect(secondReviewRes.statusCode).toBe(409);
+    expect(secondReview.code).toBe('REQUEST_ALREADY_REVIEWED');
+  });
 });

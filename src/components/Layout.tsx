@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { 
@@ -11,15 +11,33 @@ import {
   Settings,
   ShieldCheck,
   Menu,
-  X
+  X,
+  Bell
 } from 'lucide-react';
-import { useState } from 'react';
 import clsx from 'clsx';
+import { getAuthIdentity } from '../utils/authRole';
+import { getInAppMessages, getUnreadInAppCount, markAllInAppRead, markInAppMessageRead, subscribeInAppMessages } from '../utils/inAppMessages';
 
 const Layout: React.FC = () => {
   const { user, logout } = useAuthStore();
   const navigate = useNavigate();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [noticeOpen, setNoticeOpen] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [messages, setMessages] = useState<ReturnType<typeof getInAppMessages>>([]);
+  const identity = useMemo(() => getAuthIdentity(), [user?.id, user?.role_key, user?.username, user?.full_name]);
+
+  const refreshMessages = () => {
+    const list = getInAppMessages(identity.userId, identity.roleKey);
+    setMessages(list);
+    setUnreadCount(getUnreadInAppCount(identity.userId, identity.roleKey));
+  };
+
+  useEffect(() => {
+    refreshMessages();
+    const unsub = subscribeInAppMessages(refreshMessages);
+    return () => unsub();
+  }, [identity.userId, identity.roleKey]);
 
   const handleLogout = () => {
     logout();
@@ -83,13 +101,53 @@ const Layout: React.FC = () => {
               <span className="text-sm font-medium text-gray-900">{user?.full_name || user?.username}</span>
               <span className="text-xs text-gray-500 capitalize">{user?.role_key?.replace('_', ' ')}</span>
             </div>
-            <button 
-              onClick={handleLogout}
-              className="p-2 text-gray-500 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"
-              title="登出"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
+            <div className="relative flex items-center gap-1">
+              <button
+                onClick={() => {
+                  const next = !noticeOpen;
+                  setNoticeOpen(next);
+                  if (next) markAllInAppRead(identity.userId, identity.roleKey);
+                }}
+                className="p-2 text-gray-500 hover:text-apple-blue hover:bg-blue-50 rounded-full transition-colors relative"
+                title="消息通知"
+              >
+                <Bell className="w-4 h-4" />
+                {unreadCount > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[10px] leading-4 text-center">
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={handleLogout}
+                className="p-2 text-gray-500 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"
+                title="登出"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+              {noticeOpen && (
+                <div className="absolute bottom-12 right-0 w-80 max-h-96 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg p-2 z-50">
+                  <div className="px-2 py-1 text-xs text-gray-500">消息通知</div>
+                  {messages.length === 0 ? (
+                    <div className="px-2 py-4 text-xs text-gray-400">暫無新消息</div>
+                  ) : (
+                    messages.slice(0, 20).map((m) => (
+                      <button
+                        key={m.id}
+                        onClick={() => markInAppMessageRead(m.id)}
+                        className={clsx(
+                          "w-full text-left px-2 py-2 rounded-lg border mb-1",
+                          m.readAt ? "border-gray-100 bg-gray-50" : "border-blue-100 bg-blue-50"
+                        )}
+                      >
+                        <div className="text-xs font-medium text-gray-800">{m.title}</div>
+                        <div className="text-xs text-gray-600 mt-1">{m.content}</div>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </aside>

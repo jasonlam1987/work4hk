@@ -45,6 +45,20 @@
 - `REQUEST_APPROVED_AND_FILE_DELETED`
 - `REQUEST_REJECTED`
 
+### 測試執行 Log（節錄）
+```text
+✓ tests/e2e/file-api.spec.ts › delete request flow updates status and deletes physical file on approve
+✓ api/ai/files_delete_security.test.ts › rejects request and keeps file record undeleted
+```
+
+### 請求結果對比（節錄）
+```text
+POST /api/ai/files-delete-request (首次)   -> 200 DELETE_REQUEST_CREATED
+POST /api/ai/files-delete-request (再次)   -> 409 DUPLICATE_PENDING_REQUEST
+GET  /api/ai/files-delete-requests (超管) -> 包含該 uid 的 PENDING 申請
+POST /api/ai/files-delete-review APPROVE  -> 200 REQUEST_APPROVED_AND_FILE_DELETED
+```
+
 ## 驗證結果
 - Unit：`npm run test:unit` 通過。
 - E2E：`tests/e2e/file-api.spec.ts`

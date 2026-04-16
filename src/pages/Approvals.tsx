@@ -12,6 +12,7 @@ import { DeleteContext, listDeleteRequests, permanentDeleteFile, requestDeleteFi
 import { getAuthIdentity, isSuperAdmin } from '../utils/authRole';
 import FileDeleteActionDialog from '../components/FileDeleteActionDialog';
 import { pushDeleteNotice } from '../utils/deleteNotifications';
+import { pushInAppMessage } from '../utils/inAppMessages';
 
 interface StoredApprovalFile {
   id: string;
@@ -63,6 +64,19 @@ const emptyQuotaRow = (): QuotaDetailForm => ({
 });
 
 const APPROVALS_CACHE_KEY = 'cache_approvals_list_v1';
+const makeApprovalNoByDate = (items: Approval[]) => {
+  const now = new Date();
+  const day = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+  const regex = new RegExp(`^APR-${day}-(\\d{4})$`);
+  let maxSeq = 0;
+  for (const row of items) {
+    const match = String(row.approval_number || '').toUpperCase().match(regex);
+    if (!match) continue;
+    const n = Number(match[1] || '0');
+    if (n > maxSeq) maxSeq = n;
+  }
+  return `APR-${day}-${String(maxSeq + 1).padStart(4, '0')}`;
+};
 
 
 const Approvals: React.FC = () => {
@@ -450,7 +464,7 @@ const Approvals: React.FC = () => {
   
 
   const handleOpenCreate = () => {
-    setFormData(initialForm);
+    setFormData({ ...initialForm, approval_number: makeApprovalNoByDate(approvals) });
     setQuotaDetails([emptyQuotaRow()]);
     setEmployerQuery('');
     setPartnerQuery('');
@@ -460,6 +474,30 @@ const Approvals: React.FC = () => {
     setIsEditing(false);
     setSelectedId(null);
     setIsModalOpen(true);
+  };
+
+  const exportApprovalsCsv = () => {
+    const headers = ['審批編號', '僱主', '簽署人', '配額數量', '截止日期'];
+    const rows = visibleApprovals.map((approval) => {
+      const employerId = (approval as any).employer_id ?? (approval as any).employerId;
+      return [
+        String(approval.approval_number || '').toUpperCase(),
+        getEmployerDisplayById(employerId, approval.employer_name),
+        approval.signatory_name || '',
+        Number(approval.quota_quantity || 0),
+        formatDateDisplay((approval as any).expiry_date || (approval as any).valid_until),
+      ];
+    });
+    const csv = [headers, ...rows]
+      .map((row) => row.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+    const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `approval-report-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const handleOpenEdit = (approval: Approval) => {
@@ -626,6 +664,11 @@ const Approvals: React.FC = () => {
     setDeleteStatusByUid(prev => ({ ...prev, [ctx.uid]: 'PENDING' }));
     const msg = String(resp?.message || '已提交刪除申請，等待超級管理員審核');
     pushDeleteNotice({ at: Date.now(), message: msg, uid: ctx.uid, module: ctx.module });
+    pushInAppMessage({
+      title: '新刪除申請待審批',
+      content: `${ctx.companyName} 的檔案 ${ctx.fileName} 已提交刪除申請。`,
+      recipientRoleKey: 'super_admin',
+    });
     alert(msg);
   };
 
@@ -903,9 +946,14 @@ const Approvals: React.FC = () => {
               className="block w-full pl-10 pr-3 py-2 border border-gray-200 rounded-apple-sm leading-5 bg-white/80 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all sm:text-sm"
             />
           </div>
-          <button onClick={fetchApprovals} className="p-2 text-gray-500 hover:text-apple-blue hover:bg-blue-50 rounded-full transition-colors ml-2">
-            <RefreshCw className={clsx("w-5 h-5", loading && "animate-spin")} />
-          </button>
+          <div className="flex items-center gap-2 ml-2">
+            <button onClick={exportApprovalsCsv} className="px-3 py-1.5 rounded border border-gray-200 text-sm hover:bg-gray-50">
+              匯出報表
+            </button>
+            <button onClick={fetchApprovals} className="p-2 text-gray-500 hover:text-apple-blue hover:bg-blue-50 rounded-full transition-colors">
+              <RefreshCw className={clsx("w-5 h-5", loading && "animate-spin")} />
+            </button>
+          </div>
         </div>
 
         {error && (
@@ -1377,14 +1425,26 @@ const Approvals: React.FC = () => {
               </div>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">批文編號 *</label>
-              <input
-                type="text"
-                value={String(formData.approval_number || '').toUpperCase()}
-                onChange={(e) => setFormData({...formData, approval_number: e.target.value.toUpperCase()})}
-                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
-                required
-              />
+              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">審批編號 *</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={String(formData.approval_number || '').toUpperCase()}
+                  onChange={(e) => setFormData({...formData, approval_number: e.target.value.toUpperCase()})}
+                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                  required
+                />
+                {!isEditing && (
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, approval_number: makeApprovalNoByDate(approvals) })}
+                    className="px-3 py-2 text-xs rounded border border-gray-200 hover:bg-gray-50"
+                  >
+                    重產生
+                  </button>
+                )}
+              </div>
+              <p className="text-xs text-gray-500 mt-1 ml-1">格式：`APR-YYYYMMDD-流水號`，可追溯當日建立順序</p>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">發證部門</label>

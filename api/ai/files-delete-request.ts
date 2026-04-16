@@ -14,7 +14,7 @@ import {
   verifySuperAdmin,
   writeIndex,
 } from './_file_store.js';
-import { listDeleteRequestsFromStore, saveDeleteRequestToStore } from './_delete_requests_store.js';
+import { createDeleteApprovalNumber, listDeleteRequestsFromStore, saveDeleteRequestToStore } from './_delete_requests_store.js';
 export const config = {
   runtime: 'nodejs',
 };
@@ -87,6 +87,7 @@ export default async function handler(req: any, res: any) {
 
     const row = createDeleteRequestRecord({
       rec: baseRec,
+      approval_no: await createDeleteApprovalNumber(idx.delete_requests || {}),
       reason,
       requester_id: requesterId,
       requester_account: requesterId,

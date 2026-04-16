@@ -15,6 +15,7 @@ import { DeleteContext, listDeleteRequests, permanentDeleteFile, requestDeleteFi
 import { getAuthIdentity, isSuperAdmin } from '../utils/authRole';
 import FileDeleteActionDialog from '../components/FileDeleteActionDialog';
 import { pushDeleteNotice } from '../utils/deleteNotifications';
+import { pushInAppMessage } from '../utils/inAppMessages';
 
 const WORKERS_CACHE_KEY = 'cache_workers_list_v1';
 const EMPLOYERS_CACHE_KEY = 'cache_employers_list_v1';
@@ -491,6 +492,11 @@ const Workers: React.FC = () => {
     setDeleteStatusByUid(prev => ({ ...prev, [ctx.uid]: 'PENDING' }));
     const msg = String(resp?.message || '已提交刪除申請，等待超級管理員審核');
     pushDeleteNotice({ at: Date.now(), message: msg, uid: ctx.uid, module: ctx.module });
+    pushInAppMessage({
+      title: '新刪除申請待審批',
+      content: `${ctx.companyName} 的檔案 ${ctx.fileName} 已提交刪除申請。`,
+      recipientRoleKey: 'super_admin',
+    });
     alert(msg);
   };
 
