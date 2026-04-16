@@ -1,13 +1,13 @@
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { ensureStorageReady, getStoragePaths } from './_storage_root';
+import { ensureStorageReady, getStoragePaths } from './_storage_root.js';
 import {
   getSupabaseObjectPath,
   isSupabaseStorageEnabled,
   removeFromSupabaseStorage,
   uploadToSupabaseStorage,
-} from './_supabase_storage';
+} from './_supabase_storage.js';
 
 export const MAX_SIZE = 10 * 1024 * 1024;
 export const ALLOWED = new Set(['application/pdf', 'image/jpeg', 'image/png']);

@@ -12,8 +12,7 @@ import {
   verifyCsrf,
   verifySuperAdmin,
   writeIndex,
-} from './_file_store';
-
+} from './_file_store.js';
 export const config = {
   runtime: 'nodejs',
 };

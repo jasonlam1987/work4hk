@@ -1,4 +1,4 @@
-import { ensureDirs, parseRole, readIndex, respond, verifyRole } from './_file_store';
+import { ensureDirs, parseRole, readIndex, respond, verifyRole } from './_file_store.js';
 
 export const config = {
   runtime: 'nodejs',

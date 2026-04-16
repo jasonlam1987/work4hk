@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomUUID } from 'node:crypto';
-import { getSupabaseObjectPath, isSupabaseStorageEnabled, removeFromSupabaseStorage, uploadToSupabaseStorage } from './_supabase_storage';
+import { getSupabaseObjectPath, isSupabaseStorageEnabled, removeFromSupabaseStorage, uploadToSupabaseStorage } from './_supabase_storage.js';
 
 export const config = {
   runtime: 'nodejs',
@@ -46,7 +46,7 @@ export default async function handler(req: any, res: any) {
           error: 'supabase storage not configured on vercel',
         });
       }
-      const local = await import('./_file_store');
+      const local = await import('./_file_store.js');
       await local.ensureDirs();
       const idx = await local.readIndex();
 

@@ -1,4 +1,4 @@
-import filesHandler from './files';
+import filesHandler from './files.js';
 
 export default async function handler(req: any, res: any) {
   // Backward-compatible wrapper; maps worker-files payload to unified files API.

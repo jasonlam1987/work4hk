@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import { downloadFromSupabaseStorage, isSupabaseStorageEnabled } from './_supabase_storage';
+import { downloadFromSupabaseStorage, isSupabaseStorageEnabled } from './_supabase_storage.js';
 
 export const config = {
   runtime: 'nodejs',
@@ -41,7 +41,7 @@ export default async function handler(req: any, res: any) {
           error: 'supabase storage not configured on vercel',
         });
       }
-      const local = await import('./_file_store');
+      const local = await import('./_file_store.js');
       await local.ensureDirs();
       const uid = String(req?.query?.uid || '').trim();
       const tokenRaw = String(req?.query?.token || '').trim();
