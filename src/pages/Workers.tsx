@@ -12,7 +12,7 @@ import { PHONE_CODES, labourStatusOptions, labourStatusToApi, labourStatusToUi, 
 import { normalizeErrorMessage } from '../utils/errorMessage';
 import { useUploadStore } from '../store/uploadStore';
 import { DeleteContext, permanentDeleteFile, requestDeleteFile } from '../api/fileDeletion';
-import { isSuperAdmin } from '../utils/authRole';
+import { getAuthIdentity, isSuperAdmin } from '../utils/authRole';
 import FileDeleteActionDialog from '../components/FileDeleteActionDialog';
 import { pushDeleteNotice } from '../utils/deleteNotifications';
 
@@ -37,6 +37,8 @@ interface StoredFile {
   downloadUrl?: string;
   storedPath?: string;
   objectPath?: string;
+  uploaderId?: string;
+  uploaderName?: string;
   uploadTime: string;
 }
 
@@ -101,6 +103,7 @@ const Workers: React.FC = () => {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteContext, setDeleteContext] = useState<DeleteContext | null>(null);
   const superAdmin = isSuperAdmin();
+  const authIdentity = getAuthIdentity();
 
   const [employerQuery, setEmployerQuery] = useState('');
   const [approvalQuery, setApprovalQuery] = useState('');
@@ -387,6 +390,8 @@ const Workers: React.FC = () => {
               downloadUrl: (saved as any).download_url,
               storedPath: (saved as any).stored_path,
               objectPath: (saved as any).object_path,
+              uploaderId: (saved as any).uploader_id,
+              uploaderName: (saved as any).uploader_name,
               uploadTime: new Date().toLocaleString(),
             },
             ...prev,
@@ -421,6 +426,7 @@ const Workers: React.FC = () => {
   const handleDeleteStoredFile = async (id: string, uid: string) => {
     const target = storedFiles.find(f => f.id === id && f.uid === uid);
     if (!target) return;
+    if (!superAdmin && !canRequestDeleteFile(target)) return;
     setDeleteContext({
       uid: target.uid,
       fileName: target.name,
@@ -438,6 +444,17 @@ const Workers: React.FC = () => {
     await permanentDeleteFile(ctx.uid, 'DELETE', ctx);
     setStoredFiles(prev => prev.filter(f => f.uid !== ctx.uid));
     alert('刪除完成');
+  };
+
+  const canRequestDeleteFile = (file: StoredFile) => {
+    if (superAdmin) return true;
+    const uploaderId = String(file.uploaderId || '').trim();
+    const currentUserId = String(authIdentity.userId || '').trim();
+    if (uploaderId && currentUserId) return uploaderId === currentUserId;
+    const uploaderName = String(file.uploaderName || '').trim().toLowerCase();
+    const currentUserName = String(authIdentity.userName || '').trim().toLowerCase();
+    if (uploaderName && currentUserName) return uploaderName === currentUserName;
+    return false;
   };
 
   const submitDeleteRequest = async (ctx: DeleteContext, reason: string) => {
@@ -1699,8 +1716,14 @@ const Workers: React.FC = () => {
                           ) : (
                             <button
                               onClick={() => handleDeleteStoredFile(file.id, file.uid)}
-                              className="px-2 py-1 text-xs rounded border border-amber-300 text-amber-700 hover:bg-amber-50"
-                              title="申請刪除"
+                              disabled={!canRequestDeleteFile(file)}
+                              className={clsx(
+                                "px-2 py-1 text-xs rounded border",
+                                canRequestDeleteFile(file)
+                                  ? "border-amber-300 text-amber-700 hover:bg-amber-50"
+                                  : "border-gray-200 text-gray-400 bg-gray-100 cursor-not-allowed"
+                              )}
+                              title={canRequestDeleteFile(file) ? "申請刪除" : "僅上傳者可申請刪除"}
                             >
                               申請刪除
                             </button>

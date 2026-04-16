@@ -7,7 +7,7 @@ import { downloadManagedFile, listManagedFiles, MAX_UPLOAD_SIZE, uploadManagedFi
 import { normalizeErrorMessage } from '../utils/errorMessage';
 import { useUploadStore } from '../store/uploadStore';
 import { DeleteContext, permanentDeleteFile, requestDeleteFile } from '../api/fileDeletion';
-import { isSuperAdmin } from '../utils/authRole';
+import { getAuthIdentity, isSuperAdmin } from '../utils/authRole';
 import FileDeleteActionDialog from '../components/FileDeleteActionDialog';
 import { pushDeleteNotice } from '../utils/deleteNotifications';
 
@@ -22,6 +22,8 @@ interface StoredFile {
   downloadUrl?: string;
   storedPath?: string;
   objectPath?: string;
+  uploaderId?: string;
+  uploaderName?: string;
   uploadTime: string;
 }
 
@@ -67,6 +69,7 @@ const Employers: React.FC = () => {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteContext, setDeleteContext] = useState<DeleteContext | null>(null);
   const superAdmin = isSuperAdmin();
+  const authIdentity = getAuthIdentity();
 
   const [activeFolder, setActiveFolder] = useState<string>(FOLDERS[0]);
   const [storedFiles, setStoredFiles] = useState<StoredFile[]>([]);
@@ -103,6 +106,8 @@ const Employers: React.FC = () => {
       downloadUrl: it.download_url,
       storedPath: (it as any).stored_path,
       objectPath: (it as any).object_path,
+      uploaderId: (it as any).uploader_id,
+      uploaderName: (it as any).uploader_name,
       uploadTime: it.created_at ? new Date(it.created_at).toLocaleString() : new Date().toLocaleString(),
     }));
 
@@ -198,6 +203,8 @@ const Employers: React.FC = () => {
         downloadUrl: saved.download_url,
         storedPath: (saved as any).stored_path,
         objectPath: (saved as any).object_path,
+        uploaderId: (saved as any).uploader_id,
+        uploaderName: (saved as any).uploader_name,
         uploadTime: new Date().toLocaleString(),
       };
       const cacheKey = folderCacheKey(selectedEmployerForFiles.id, activeFolder);
@@ -232,6 +239,7 @@ const Employers: React.FC = () => {
   const handleDeleteFile = (id: string) => {
     const target = storedFiles.find(f => f.id === id);
     if (!target?.uid) return;
+    if (!superAdmin && !canRequestDeleteFile(target)) return;
     setDeleteContext({
       uid: target.uid,
       fileName: target.name,
@@ -243,6 +251,17 @@ const Employers: React.FC = () => {
       objectPath: target.objectPath || '',
     });
     setDeleteDialogOpen(true);
+  };
+
+  const canRequestDeleteFile = (file: StoredFile) => {
+    if (superAdmin) return true;
+    const uploaderId = String(file.uploaderId || '').trim();
+    const currentUserId = String(authIdentity.userId || '').trim();
+    if (uploaderId && currentUserId) return uploaderId === currentUserId;
+    const uploaderName = String(file.uploaderName || '').trim().toLowerCase();
+    const currentUserName = String(authIdentity.userName || '').trim().toLowerCase();
+    if (uploaderName && currentUserName) return uploaderName === currentUserName;
+    return false;
   };
 
   const confirmPermanentDelete = async (ctx: DeleteContext) => {
@@ -948,8 +967,14 @@ const Employers: React.FC = () => {
                           ) : (
                             <button
                               onClick={() => handleDeleteFile(file.id)}
-                              className="px-2 py-1 text-xs rounded border border-amber-300 text-amber-700 hover:bg-amber-50"
-                              title="申請刪除"
+                              disabled={!canRequestDeleteFile(file)}
+                              className={clsx(
+                                "px-2 py-1 text-xs rounded border",
+                                canRequestDeleteFile(file)
+                                  ? "border-amber-300 text-amber-700 hover:bg-amber-50"
+                                  : "border-gray-200 text-gray-400 bg-gray-100 cursor-not-allowed"
+                              )}
+                              title={canRequestDeleteFile(file) ? "申請刪除" : "僅上傳者可申請刪除"}
                             >
                               申請刪除
                             </button>

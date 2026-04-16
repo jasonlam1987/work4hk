@@ -1,4 +1,5 @@
 import apiClient from './client';
+import { getAuthIdentity } from '../utils/authRole';
 
 export type FileModule = 'employers' | 'approvals' | 'workers';
 
@@ -18,6 +19,8 @@ export type ManagedFile = {
   sha256?: string;
   stored_path?: string;
   object_path?: string;
+  uploader_id?: string;
+  uploader_name?: string;
   download_url: string;
   token_expires_in?: number;
   created_at?: string;
@@ -43,6 +46,7 @@ const fileToDataUrl = (file: File) =>
   });
 
 const getUserRoleHeader = () => {
+  const identity = getAuthIdentity();
   try {
     const raw = localStorage.getItem('auth-storage');
     const parsed = raw ? JSON.parse(raw) : null;
@@ -55,10 +59,19 @@ const getUserRoleHeader = () => {
         (directRole as any).name;
       if (typeof nested === 'string' && nested.trim()) return nested.trim();
     }
-    return 'admin';
+    return identity.roleKey || 'admin';
   } catch {
-    return 'admin';
+    return identity.roleKey || 'admin';
   }
+};
+
+const getAuthHeaders = () => {
+  const identity = getAuthIdentity();
+  return {
+    'x-user-role': getUserRoleHeader(),
+    'x-user-id': String(identity.userId || ''),
+    'x-user-name': String(identity.userName || ''),
+  };
 };
 
 export const uploadManagedFile = async (req: UploadFileRequest): Promise<ManagedFile> => {
@@ -88,7 +101,7 @@ export const uploadManagedFile = async (req: UploadFileRequest): Promise<Managed
         },
         {
           timeout: 120000,
-          headers: { 'x-user-role': getUserRoleHeader() },
+          headers: getAuthHeaders(),
           onUploadProgress: (evt: any) => {
             const loaded = Number(evt?.loaded || 0);
             const total = Number(evt?.total || dataUrl.length || 1);
@@ -117,7 +130,7 @@ export const uploadManagedFile = async (req: UploadFileRequest): Promise<Managed
 export const listManagedFiles = async (module: FileModule, ownerId: number, folder?: string) => {
   const res = await apiClient.get<{ items: ManagedFile[] }>('/ai/files', {
     params: { module, owner_id: ownerId, folder },
-    headers: { 'x-user-role': getUserRoleHeader() },
+    headers: getAuthHeaders(),
   });
   return Array.isArray(res.data?.items) ? res.data.items : [];
 };
@@ -125,7 +138,7 @@ export const listManagedFiles = async (module: FileModule, ownerId: number, fold
 export const deleteManagedFile = async (uid: string) => {
   const res = await apiClient.delete('/ai/files', {
     data: { uid },
-    headers: { 'x-user-role': getUserRoleHeader() },
+    headers: getAuthHeaders(),
   });
   return res.data;
 };
