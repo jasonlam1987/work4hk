@@ -1,14 +1,20 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Search, Edit2, Loader2, RefreshCw, Briefcase, GraduationCap, Link2, Phone, Home, Mail, Trash2, FolderOpen, UploadCloud, Download } from 'lucide-react';
+import { Plus, Search, Edit2, Loader2, RefreshCw, Briefcase, GraduationCap, Link2, Home, Mail, Trash2, FolderOpen, UploadCloud, Download } from 'lucide-react';
 import clsx from 'clsx';
 import Modal from '../components/Modal';
 import { Worker, WorkerCreate, createWorker, deleteWorker, getWorkers, updateWorker } from '../api/workers';
 import { Employer, getEmployers } from '../api/employers';
 import { Approval, getApprovals, getApprovalQuotaDetails, QuotaDetail } from '../api/approvals';
 import { WorkerEducation, WorkerProfile, WorkerWorkExperience, getWorkerProfile, setWorkerProfile } from '../utils/workerProfile';
-import { WorkerFileCategory, WorkerFileMeta, deleteWorkerFile, uploadWorkerFile } from '../api/workerFiles';
+import { WorkerFileCategory, WorkerFileMeta, uploadWorkerFile } from '../api/workerFiles';
 import { downloadManagedFile, MAX_UPLOAD_SIZE } from '../api/files';
 import { PHONE_CODES, labourStatusOptions, labourStatusToApi, labourStatusToUi, normalizeDate, isMainlandId, isPhoneNumber, mergePhone, formatEmploymentMonths, parseEmploymentMonths } from '../utils/workersForm';
+import { normalizeErrorMessage } from '../utils/errorMessage';
+import { useUploadStore } from '../store/uploadStore';
+import { DeleteContext, permanentDeleteFile, requestDeleteFile } from '../api/fileDeletion';
+import { isSuperAdmin } from '../utils/authRole';
+import FileDeleteActionDialog from '../components/FileDeleteActionDialog';
+import { pushDeleteNotice } from '../utils/deleteNotifications';
 
 const WORKERS_CACHE_KEY = 'cache_workers_list_v1';
 const EMPLOYERS_CACHE_KEY = 'cache_employers_list_v1';
@@ -29,6 +35,7 @@ interface StoredFile {
   size: number;
   mimeType: string;
   downloadUrl?: string;
+  storedPath?: string;
   uploadTime: string;
 }
 
@@ -83,10 +90,6 @@ const Workers: React.FC = () => {
     files: emptyFiles(),
   });
   const [uploadingCategory, setUploadingCategory] = useState<FileTab | null>(null);
-  const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
-  const [uploadEta, setUploadEta] = useState<Record<string, number | null>>({});
-  const [uploadErrors, setUploadErrors] = useState<Record<string, string>>({});
-  const [pendingRetry, setPendingRetry] = useState<Record<string, File>>({});
   const [isFileModalOpen, setIsFileModalOpen] = useState(false);
   const [selectedWorkerForFiles, setSelectedWorkerForFiles] = useState<Worker | null>(null);
   const [storedFiles, setStoredFiles] = useState<StoredFile[]>([]);
@@ -94,6 +97,9 @@ const Workers: React.FC = () => {
   const [dragOver, setDragOver] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Worker | null>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteContext, setDeleteContext] = useState<DeleteContext | null>(null);
+  const superAdmin = isSuperAdmin();
 
   const [employerQuery, setEmployerQuery] = useState('');
   const [approvalQuery, setApprovalQuery] = useState('');
@@ -102,6 +108,14 @@ const Workers: React.FC = () => {
   const employerBlurTimer = useRef<number | null>(null);
   const approvalBlurTimer = useRef<number | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadScope = `workers:${selectedWorkerForFiles?.id || 0}:${activeFolder}`;
+  const tasksByScope = useUploadStore(s => s.tasksByScope);
+  const beginTask = useUploadStore(s => s.beginTask);
+  const updateTask = useUploadStore(s => s.updateTask);
+  const failTask = useUploadStore(s => s.failTask);
+  const succeedTask = useUploadStore(s => s.succeedTask);
+  const clearScope = useUploadStore(s => s.clearScope);
+  const uploadTasks = useMemo(() => Object.values(tasksByScope[uploadScope] || {}), [tasksByScope, uploadScope]);
 
   const employerId = Number((formData as any).employer_id || 0) || undefined;
   const approvalId = Number((formData as any).approval_id || profile.approval_id || 0) || undefined;
@@ -344,49 +358,44 @@ const Workers: React.FC = () => {
     try {
       for (const f of files) {
         const key = `${f.name}-${f.size}-${Date.now()}`;
-        setUploadProgress(prev => ({ ...prev, [key]: 5 }));
-        setUploadErrors(prev => ({ ...prev, [key]: '' }));
-        const saved: WorkerFileMeta = await uploadWorkerFile({
-          owner_id: workerId,
-          category,
-          file_name: f.name,
-          mime_type: f.type,
-          data_url: '',
-          file: f,
-          onProgress: ({ percent, remainingSeconds }) => {
-            setUploadProgress(prev => ({ ...prev, [key]: percent }));
-            setUploadEta(prev => ({ ...prev, [key]: remainingSeconds }));
-          },
-        });
+        beginTask(uploadScope, key, f.name, f);
+        updateTask(uploadScope, key, { percent: 5, error: '', remainingSeconds: null, retryFile: f });
+        try {
+          const saved: WorkerFileMeta = await uploadWorkerFile({
+            owner_id: workerId,
+            category,
+            file_name: f.name,
+            mime_type: f.type,
+            data_url: '',
+            file: f,
+            onProgress: ({ percent, remainingSeconds }) => {
+              updateTask(uploadScope, key, { percent, remainingSeconds });
+            },
+          });
 
-        const folder = activeFolder;
-        setStoredFiles(prev => [
-          {
-            id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            workerId,
-            folder,
-            uid: saved.uid,
-            name: saved.original_name,
-            size: saved.size,
-            mimeType: saved.mime_type,
-            downloadUrl: (saved as any).download_url,
-            uploadTime: new Date().toLocaleString(),
-          },
-          ...prev,
-        ]);
-        setUploadProgress(prev => ({ ...prev, [key]: 100 }));
-      setUploadEta(prev => ({ ...prev, [key]: 0 }));
-      }
-    } catch (err: any) {
-      const msg = String(err?.response?.data?.error || err?.message || '未知錯誤');
-      setUploadErrors(prev => ({ ...prev, [`batch-${Date.now()}`]: msg }));
-      for (const f of files) {
-        const retryKey = `${f.name}-${f.size}`;
-        setPendingRetry(prev => ({ ...prev, [retryKey]: f }));
+          const folder = activeFolder;
+          setStoredFiles(prev => [
+            {
+              id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              workerId,
+              folder,
+              uid: saved.uid,
+              name: saved.original_name,
+              size: saved.size,
+              mimeType: saved.mime_type,
+              downloadUrl: (saved as any).download_url,
+              storedPath: (saved as any).stored_path,
+              uploadTime: new Date().toLocaleString(),
+            },
+            ...prev,
+          ]);
+          succeedTask(uploadScope, key);
+        } catch (err: any) {
+          failTask(uploadScope, key, normalizeErrorMessage(err, '上傳失敗'), f);
+        }
       }
     } finally {
       setUploadingCategory(null);
-      setTimeout(() => setUploadProgress({}), 600);
     }
   };
 
@@ -408,12 +417,31 @@ const Workers: React.FC = () => {
   };
 
   const handleDeleteStoredFile = async (id: string, uid: string) => {
-    try {
-      await deleteWorkerFile(uid);
-    } catch {
-    } finally {
-      setStoredFiles(prev => prev.filter(f => f.id !== id));
-    }
+    const target = storedFiles.find(f => f.id === id && f.uid === uid);
+    if (!target) return;
+    setDeleteContext({
+      uid: target.uid,
+      fileName: target.name,
+      companyName: selectedWorkerForFiles?.labour_name || '-',
+      module: 'workers',
+      sectionName: activeFolder,
+      folder: activeFolder,
+      storedPath: target.storedPath || '',
+    });
+    setDeleteDialogOpen(true);
+  };
+
+  const confirmPermanentDelete = async (ctx: DeleteContext) => {
+    await permanentDeleteFile(ctx.uid, 'DELETE');
+    setStoredFiles(prev => prev.filter(f => f.uid !== ctx.uid));
+    alert('刪除完成');
+  };
+
+  const submitDeleteRequest = async (ctx: DeleteContext, reason: string) => {
+    const resp = await requestDeleteFile(ctx, reason);
+    const msg = String(resp?.message || '已提交刪除申請，等待超級管理員審核');
+    pushDeleteNotice({ at: Date.now(), message: msg, uid: ctx.uid, module: ctx.module });
+    alert(msg);
   };
 
   const handleDownloadStoredFile = (f: StoredFile) => {
@@ -422,7 +450,7 @@ const Workers: React.FC = () => {
       return;
     }
     downloadManagedFile(f.downloadUrl, f.name).catch((err: any) => {
-      alert(`下載失敗：${err?.response?.data?.error || err?.message || '未知錯誤'}`);
+      alert(`下載失敗：${normalizeErrorMessage(err, '未知錯誤')}`);
     });
   };
 
@@ -941,15 +969,12 @@ const Workers: React.FC = () => {
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">聯繫電話</label>
               <div className="flex flex-col sm:flex-row gap-2">
-                <div className="relative w-28">
-                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                    <Phone className="h-4 w-4 text-gray-400" />
-                  </div>
+                <div className="w-32 sm:w-36">
                   <select
                     value={profile.phone_code || '+852'}
                     onChange={(e) => setProfile(prev => ({ ...prev, phone_code: e.target.value as any }))}
                     className={clsx(
-                      "w-full pl-9 pr-2 py-2 bg-white border rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all",
+                      "w-full px-3 py-2 bg-white border rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all",
                       profile.phone_number && !isPhoneNumber(profile.phone_number) ? 'border-red-300' : 'border-gray-200'
                     )}
                   >
@@ -966,7 +991,7 @@ const Workers: React.FC = () => {
                     setProfile(prev => ({ ...prev, phone_number: v }));
                   }}
                   className={clsx(
-                    "w-full px-4 py-2 bg-white border rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all",
+                    "flex-1 min-w-[220px] px-4 py-2 bg-white border rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all",
                     profile.phone_number && !isPhoneNumber(profile.phone_number) ? 'border-red-300' : 'border-gray-200'
                   )}
                   placeholder="電話號碼（7-11位數字）"
@@ -1534,7 +1559,10 @@ const Workers: React.FC = () => {
 
       <Modal
         isOpen={isFileModalOpen}
-        onClose={() => setIsFileModalOpen(false)}
+        onClose={() => {
+          clearScope(uploadScope);
+          setIsFileModalOpen(false);
+        }}
         title={`存檔空間 - ${selectedWorkerForFiles?.labour_name || ''}`}
         className="max-w-4xl"
       >
@@ -1595,39 +1623,35 @@ const Workers: React.FC = () => {
               拖曳檔案到此處即可上傳（支援批次）
             </div>
 
-            {Object.keys(uploadProgress).length > 0 && (
+            {uploadTasks.length > 0 && (
               <div className="px-4 pt-3 space-y-2">
-                {Object.entries(uploadProgress).map(([k, v]) => (
-                  <div key={k}>
+                {uploadTasks.map((task) => (
+                  <div key={task.key}>
                     <div className="flex justify-between text-xs text-gray-600 mb-1">
-                      <span className="truncate max-w-[70%]">{k}</span>
-                      <span>{Math.round(v)}%{uploadEta[k] && uploadEta[k]! > 0 ? ` · 剩餘 ${uploadEta[k]} 秒` : ''}</span>
+                      <span className="truncate max-w-[70%]">{task.name}</span>
+                      <span>{Math.round(task.percent)}%{task.remainingSeconds && task.remainingSeconds > 0 ? ` · 剩餘 ${task.remainingSeconds} 秒` : ''}</span>
                     </div>
                     <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                      <div className="h-2 bg-apple-blue" style={{ width: `${v}%` }} />
+                      <div className="h-2 bg-apple-blue" style={{ width: `${task.percent}%` }} />
                     </div>
+                    {task.error && (
+                      <div className="p-2 mt-1 rounded border border-red-200 bg-red-50 text-xs text-red-700 flex items-center justify-between">
+                        <span className="truncate max-w-[75%]">{task.error}</span>
+                        {task.retryFile && (
+                          <button
+                            type="button"
+                            className="px-2 py-0.5 rounded bg-red-100 hover:bg-red-200"
+                            onClick={() => {
+                              if (!selectedWorkerForFiles) return;
+                              processUploadFiles([task.retryFile!], folderToCategory(activeFolder), selectedWorkerForFiles.id);
+                            }}
+                          >
+                            重試
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
-                ))}
-                {Object.entries(uploadErrors).map(([k, msg]) => (
-                  msg ? (
-                    <div key={`err-${k}`} className="p-2 rounded border border-red-200 bg-red-50 text-xs text-red-700 flex items-center justify-between">
-                      <span className="truncate max-w-[75%]">{msg}</span>
-                      {Object.keys(pendingRetry).length > 0 && (
-                        <button
-                          type="button"
-                          className="px-2 py-0.5 rounded bg-red-100 hover:bg-red-200"
-                          onClick={() => {
-                            const firstKey = Object.keys(pendingRetry)[0];
-                            const f = pendingRetry[firstKey];
-                            if (!selectedWorkerForFiles || !f) return;
-                            processUploadFiles([f], folderToCategory(activeFolder), selectedWorkerForFiles.id);
-                          }}
-                        >
-                          重試
-                        </button>
-                      )}
-                    </div>
-                  ) : null
                 ))}
               </div>
             )}
@@ -1661,13 +1685,23 @@ const Workers: React.FC = () => {
                           >
                             <Download className="w-4 h-4" />
                           </button>
-                          <button
-                            onClick={() => handleDeleteStoredFile(file.id, file.uid)}
-                            className="p-1.5 text-gray-500 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors"
-                            title="刪除"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          {superAdmin ? (
+                            <button
+                              onClick={() => handleDeleteStoredFile(file.id, file.uid)}
+                              className="p-1.5 text-gray-500 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors"
+                              title="刪除"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleDeleteStoredFile(file.id, file.uid)}
+                              className="px-2 py-1 text-xs rounded border border-amber-300 text-amber-700 hover:bg-amber-50"
+                              title="申請刪除"
+                            >
+                              申請刪除
+                            </button>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -1677,6 +1711,14 @@ const Workers: React.FC = () => {
           </div>
         </div>
       </Modal>
+
+      <FileDeleteActionDialog
+        isOpen={deleteDialogOpen}
+        onClose={() => setDeleteDialogOpen(false)}
+        context={deleteContext}
+        onConfirmPermanentDelete={confirmPermanentDelete}
+        onSubmitRequest={submitDeleteRequest}
+      />
 
       {deleteModalOpen && deleteTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">

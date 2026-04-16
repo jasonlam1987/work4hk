@@ -2,7 +2,7 @@
 
 ## 1. 前置
 - Node.js 18+
-- 可寫入環境（Vercel Serverless 會使用 `/tmp/work4hk_worker_uploads`）
+- 可寫入環境（檔案基準路徑：`C:\Users\88513\iCloudDrive\work4hk`，可由 `FILE_STORAGE_ROOT` 覆蓋）
 
 ## 2. 安裝依賴
 ```bash

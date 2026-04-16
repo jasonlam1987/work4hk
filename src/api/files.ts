@@ -45,8 +45,16 @@ const getUserRoleHeader = () => {
   try {
     const raw = localStorage.getItem('auth-storage');
     const parsed = raw ? JSON.parse(raw) : null;
-    const role = parsed?.state?.user?.role_key || parsed?.state?.user?.role || 'admin';
-    return String(role || 'admin');
+    const directRole = parsed?.state?.user?.role_key ?? parsed?.state?.user?.role;
+    if (typeof directRole === 'string' && directRole.trim()) return directRole.trim();
+    if (directRole && typeof directRole === 'object') {
+      const nested =
+        (directRole as any).role_key ??
+        (directRole as any).key ??
+        (directRole as any).name;
+      if (typeof nested === 'string' && nested.trim()) return nested.trim();
+    }
+    return 'admin';
   } catch {
     return 'admin';
   }
@@ -121,8 +129,16 @@ export const deleteManagedFile = async (uid: string) => {
   return res.data;
 };
 
+export const normalizeDownloadUrl = (downloadUrl: string) => {
+  const raw = String(downloadUrl || '').trim();
+  if (!raw) return raw;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith('/api/')) return raw.replace(/^\/api/, '');
+  return raw;
+};
+
 export const downloadManagedFile = async (downloadUrl: string, fileName: string) => {
-  const res = await apiClient.get(downloadUrl, {
+  const res = await apiClient.get(normalizeDownloadUrl(downloadUrl), {
     responseType: 'blob',
     headers: { 'x-user-role': getUserRoleHeader() },
   });

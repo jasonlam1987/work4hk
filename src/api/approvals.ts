@@ -12,6 +12,7 @@ export interface Approval {
   expiry_date?: string;
   signatory_name?: string;
   quota_details?: QuotaDetail[];
+  quota_quantity?: number;
   [key: string]: any;
 }
 
@@ -231,10 +232,12 @@ export const getApprovals = async (params?: { q?: string; limit?: number; offset
     const serverList: Approval[] = serverListRaw.map((a: any) => {
       const issue = normalizeDate((a as any).issue_date);
       const expiry = normalizeDate((a as any).expiry_date) || normalizeDate((a as any).valid_until) || (issue ? calcExpiryDate(issue) : '');
+      const quotaQuantity = Array.isArray((a as any).quota_details) ? (a as any).quota_details.length : undefined;
       return {
         ...a,
         issue_date: issue || undefined,
         expiry_date: expiry || undefined,
+        quota_quantity: quotaQuantity,
       } as Approval;
     });
     if (!ENABLE_MOCK_APPROVALS) {

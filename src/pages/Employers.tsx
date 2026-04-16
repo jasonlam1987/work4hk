@@ -3,7 +3,13 @@ import { Plus, Search, Edit2, Loader2, RefreshCw, UploadCloud, Trash2, FolderOpe
 import { Employer, getEmployers, createEmployer, updateEmployer, EmployerCreate, deleteEmployer } from '../api/employers';
 import Modal from '../components/Modal';
 import clsx from 'clsx';
-import { deleteManagedFile, downloadManagedFile, listManagedFiles, MAX_UPLOAD_SIZE, uploadManagedFile } from '../api/files';
+import { downloadManagedFile, listManagedFiles, MAX_UPLOAD_SIZE, uploadManagedFile } from '../api/files';
+import { normalizeErrorMessage } from '../utils/errorMessage';
+import { useUploadStore } from '../store/uploadStore';
+import { DeleteContext, permanentDeleteFile, requestDeleteFile } from '../api/fileDeletion';
+import { isSuperAdmin } from '../utils/authRole';
+import FileDeleteActionDialog from '../components/FileDeleteActionDialog';
+import { pushDeleteNotice } from '../utils/deleteNotifications';
 
 interface StoredFile {
   id: string;
@@ -14,6 +20,7 @@ interface StoredFile {
   size: number;
   mimeType?: string;
   downloadUrl?: string;
+  storedPath?: string;
   uploadTime: string;
 }
 
@@ -56,14 +63,24 @@ const Employers: React.FC = () => {
   // Custom Delete Modal states
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{id: number, name: string} | null>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteContext, setDeleteContext] = useState<DeleteContext | null>(null);
+  const superAdmin = isSuperAdmin();
 
   const [activeFolder, setActiveFolder] = useState<string>(FOLDERS[0]);
   const [storedFiles, setStoredFiles] = useState<StoredFile[]>([]);
   const uploadInputRef = useRef<HTMLInputElement>(null);
-  const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
-  const [uploadEta, setUploadEta] = useState<Record<string, number | null>>({});
-  const [uploadErrors, setUploadErrors] = useState<Record<string, string>>({});
-  const [pendingRetry, setPendingRetry] = useState<Record<string, File>>({});
+  const uploadScope = `employers:${selectedEmployerForFiles?.id || 0}:${activeFolder}`;
+  const tasksByScope = useUploadStore(s => s.tasksByScope);
+  const beginTask = useUploadStore(s => s.beginTask);
+  const updateTask = useUploadStore(s => s.updateTask);
+  const failTask = useUploadStore(s => s.failTask);
+  const succeedTask = useUploadStore(s => s.succeedTask);
+  const clearScope = useUploadStore(s => s.clearScope);
+  const uploadTasks = React.useMemo(
+    () => Object.values(tasksByScope[uploadScope] || {}),
+    [tasksByScope, uploadScope]
+  );
 
   useEffect(() => {
     const files = localStorage.getItem('mock_employer_files');
@@ -84,6 +101,7 @@ const Employers: React.FC = () => {
         size: it.size,
         mimeType: it.mime_type,
         downloadUrl: it.download_url,
+        storedPath: (it as any).stored_path,
         uploadTime: it.created_at ? new Date(it.created_at).toLocaleString() : new Date().toLocaleString(),
       })));
     }).catch(() => undefined);
@@ -131,6 +149,7 @@ const Employers: React.FC = () => {
         size: it.size,
         mimeType: it.mime_type,
         downloadUrl: it.download_url,
+        storedPath: (it as any).stored_path,
         uploadTime: it.created_at ? new Date(it.created_at).toLocaleString() : new Date().toLocaleString(),
       }));
       setStoredFiles(mapped);
@@ -144,8 +163,8 @@ const Employers: React.FC = () => {
       return;
     }
     const key = `${file.name}-${file.size}-${Date.now()}`;
-    setUploadProgress(prev => ({ ...prev, [key]: 0 }));
-    setUploadErrors(prev => ({ ...prev, [key]: '' }));
+    beginTask(uploadScope, key, file.name, file);
+    updateTask(uploadScope, key, { percent: 0, error: '', remainingSeconds: null });
     try {
       const saved = await uploadManagedFile({
         module: 'employers',
@@ -154,8 +173,7 @@ const Employers: React.FC = () => {
         file,
         retries: 1,
         onProgress: ({ percent, remainingSeconds }) => {
-          setUploadProgress(prev => ({ ...prev, [key]: percent }));
-          setUploadEta(prev => ({ ...prev, [key]: remainingSeconds }));
+          updateTask(uploadScope, key, { percent, remainingSeconds });
         },
       });
       const newFile: StoredFile = {
@@ -167,16 +185,15 @@ const Employers: React.FC = () => {
         size: saved.size,
         mimeType: saved.mime_type,
         downloadUrl: saved.download_url,
+        storedPath: (saved as any).stored_path,
         uploadTime: new Date().toLocaleString(),
       };
       setStoredFiles(prev => [newFile, ...prev]);
+      succeedTask(uploadScope, key);
       alert(`上傳成功：${saved.original_name}`);
     } catch (err: any) {
-      const message = String(err?.response?.data?.error || err?.message || '上傳失敗');
-      setUploadErrors(prev => ({ ...prev, [key]: message }));
-      setPendingRetry(prev => ({ ...prev, [key]: file }));
-    } finally {
-      setUploadProgress(prev => ({ ...prev, [key]: 100 }));
+      const message = normalizeErrorMessage(err, '上傳失敗');
+      failTask(uploadScope, key, message, file);
     }
   };
 
@@ -193,17 +210,36 @@ const Employers: React.FC = () => {
   const handleDownloadFile = (file: StoredFile) => {
     if (!file.downloadUrl) return alert('下載連結不存在，請重新上傳');
     downloadManagedFile(file.downloadUrl, file.name).catch((err: any) => {
-      alert(String(err?.response?.data?.error || err?.message || '下載失敗'));
+      alert(normalizeErrorMessage(err, '下載失敗'));
     });
   };
 
   const handleDeleteFile = (id: string) => {
-    if (!window.confirm('確定要刪除這個檔案嗎？')) return;
     const target = storedFiles.find(f => f.id === id);
-    if (target?.uid) {
-      deleteManagedFile(target.uid).catch(() => undefined);
-    }
-    setStoredFiles(prev => prev.filter(f => f.id !== id));
+    if (!target?.uid) return;
+    setDeleteContext({
+      uid: target.uid,
+      fileName: target.name,
+      companyName: selectedEmployerForFiles?.name || '-',
+      module: 'employers',
+      sectionName: activeFolder,
+      folder: activeFolder,
+      storedPath: target.storedPath || '',
+    });
+    setDeleteDialogOpen(true);
+  };
+
+  const confirmPermanentDelete = async (ctx: DeleteContext) => {
+    await permanentDeleteFile(ctx.uid, 'DELETE');
+    setStoredFiles(prev => prev.filter(f => f.uid !== ctx.uid));
+    alert('刪除完成');
+  };
+
+  const submitDeleteRequest = async (ctx: DeleteContext, reason: string) => {
+    const resp = await requestDeleteFile(ctx, reason);
+    const msg = String(resp?.message || '已提交刪除申請，等待超級管理員審核');
+    pushDeleteNotice({ at: Date.now(), message: msg, uid: ctx.uid, module: ctx.module });
+    alert(msg);
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -769,7 +805,10 @@ const Employers: React.FC = () => {
       {/* File Management Modal */}
       <Modal
         isOpen={isFileModalOpen}
-        onClose={() => setIsFileModalOpen(false)}
+        onClose={() => {
+          clearScope(uploadScope);
+          setIsFileModalOpen(false);
+        }}
         title={`儲存空間 - ${selectedEmployerForFiles?.name}`}
         className="max-w-4xl"
       >
@@ -820,25 +859,25 @@ const Employers: React.FC = () => {
 
             {/* File List */}
             <div className="flex-1 overflow-y-auto p-4">
-              {Object.keys(uploadProgress).length > 0 && (
+              {uploadTasks.length > 0 && (
                 <div className="mb-3 space-y-2">
-                  {Object.entries(uploadProgress).map(([k, v]) => (
-                    <div key={k} className="p-2 border border-gray-200 rounded bg-gray-50">
+                  {uploadTasks.map((task) => (
+                    <div key={task.key} className="p-2 border border-gray-200 rounded bg-gray-50">
                       <div className="flex justify-between text-xs text-gray-600">
-                        <span className="truncate max-w-[70%]">{k}</span>
-                        <span>{Math.round(v)}%{uploadEta[k] && uploadEta[k]! > 0 ? ` · 剩餘 ${uploadEta[k]} 秒` : ''}</span>
+                        <span className="truncate max-w-[70%]">{task.name}</span>
+                        <span>{Math.round(task.percent)}%{task.remainingSeconds && task.remainingSeconds > 0 ? ` · 剩餘 ${task.remainingSeconds} 秒` : ''}</span>
                       </div>
                       <div className="h-2 bg-gray-200 rounded mt-1 overflow-hidden">
-                        <div className="h-2 bg-apple-blue" style={{ width: `${v}%` }} />
+                        <div className="h-2 bg-apple-blue" style={{ width: `${task.percent}%` }} />
                       </div>
-                      {uploadErrors[k] && (
+                      {task.error && (
                         <div className="flex items-center justify-between mt-1">
-                          <span className="text-xs text-red-600">{uploadErrors[k]}</span>
-                          {pendingRetry[k] && (
+                          <span className="text-xs text-red-600">{task.error}</span>
+                          {task.retryFile && (
                             <button
                               type="button"
                               className="text-xs px-2 py-0.5 rounded bg-red-50 text-red-700 hover:bg-red-100"
-                              onClick={() => doUpload(pendingRetry[k])}
+                              onClick={() => doUpload(task.retryFile!)}
                             >
                               重試
                             </button>
@@ -879,13 +918,23 @@ const Employers: React.FC = () => {
                           >
                             <Download className="w-4 h-4" />
                           </button>
-                          <button 
-                            onClick={() => handleDeleteFile(file.id)}
-                            className="p-1.5 text-gray-500 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors"
-                            title="刪除"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          {superAdmin ? (
+                            <button 
+                              onClick={() => handleDeleteFile(file.id)}
+                              className="p-1.5 text-gray-500 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors"
+                              title="刪除"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleDeleteFile(file.id)}
+                              className="px-2 py-1 text-xs rounded border border-amber-300 text-amber-700 hover:bg-amber-50"
+                              title="申請刪除"
+                            >
+                              申請刪除
+                            </button>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -895,6 +944,14 @@ const Employers: React.FC = () => {
           </div>
         </div>
       </Modal>
+
+      <FileDeleteActionDialog
+        isOpen={deleteDialogOpen}
+        onClose={() => setDeleteDialogOpen(false)}
+        context={deleteContext}
+        onConfirmPermanentDelete={confirmPermanentDelete}
+        onSubmitRequest={submitDeleteRequest}
+      />
 
       {/* Custom Delete Confirmation Modal */}
       {deleteModalOpen && deleteTarget && (

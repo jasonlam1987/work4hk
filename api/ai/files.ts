@@ -10,8 +10,8 @@ import {
 } from './_file_store';
 
 export default async function handler(req: any, res: any) {
-  if (!verifyRole(req)) return respond(res, 403, { error: 'forbidden' });
-  if (!['POST', 'DELETE', 'GET'].includes(req.method)) return respond(res, 405, { error: 'Method Not Allowed' });
+  if (!verifyRole(req)) return respond(res, 403, { code: 'FORBIDDEN', error: 'forbidden' });
+  if (!['POST', 'DELETE', 'GET'].includes(req.method)) return respond(res, 405, { code: 'METHOD_NOT_ALLOWED', error: 'Method Not Allowed' });
 
   try {
     await ensureDirs();
@@ -42,9 +42,9 @@ export default async function handler(req: any, res: any) {
 
     if (req.method === 'DELETE') {
       const uid = String(body?.uid || '').trim();
-      if (!uid) return respond(res, 400, { error: 'missing uid' });
+      if (!uid) return respond(res, 400, { code: 'MISSING_UID', error: 'missing uid' });
       const rec = idx.records[uid];
-      if (!rec) return respond(res, 404, { error: 'file not found' });
+      if (!rec) return respond(res, 404, { code: 'FILE_NOT_FOUND', error: 'file not found' });
       rec.deleted_at = new Date().toISOString();
       idx.records[uid] = rec;
       await writeIndex(idx);
@@ -72,11 +72,14 @@ export default async function handler(req: any, res: any) {
   } catch (e: any) {
     const msg = String(e?.message || e);
     if (msg.includes('file too large')) {
-      return respond(res, 400, { error: '檔案大小超過 10 MB，請壓縮後再上傳' });
+      console.error('[files] FILE_TOO_LARGE', { detail: msg });
+      return respond(res, 400, { code: 'FILE_TOO_LARGE', error: '檔案大小超過 10 MB，請壓縮後再上傳' });
     }
     if (msg.includes('unsupported file type')) {
-      return respond(res, 400, { error: 'Unsupported file type' });
+      console.error('[files] UNSUPPORTED_FILE_TYPE', { detail: msg });
+      return respond(res, 400, { code: 'UNSUPPORTED_FILE_TYPE', error: 'Unsupported file type' });
     }
-    return respond(res, 500, { error: 'Upload failed', detail: msg });
+    console.error('[files] UPLOAD_FAILED', { detail: msg });
+    return respond(res, 500, { code: 'UPLOAD_FAILED', error: 'Upload failed', detail: msg });
   }
 }

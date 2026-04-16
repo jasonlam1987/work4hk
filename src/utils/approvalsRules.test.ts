@@ -5,6 +5,8 @@ describe('approvals rules', () => {
   it('validates department options', () => {
     expect(APPROVAL_DEPARTMENTS).toEqual(['勞工處', '發展局', '機管局', '福利處', '運輸署']);
     expect(isValidDepartment('勞工處')).toBe(true);
+    expect(isValidDepartment(' 勞工處 ')).toBe(true);
+    expect(isValidDepartment(undefined)).toBe(false);
     expect(isValidDepartment('未知部門')).toBe(false);
   });
 
@@ -58,5 +60,15 @@ describe('approvals rules', () => {
     expect(r?.status).toBe('read');
     expect(reminders.some(x => x.approval_id === 10)).toBe(false);
     expect(reminders.some(x => x.approval_id === 11)).toBe(false);
+  });
+
+  it('falls back message fields when employer and number are missing', () => {
+    const now = new Date('2025-01-01');
+    const list = [{ id: 88, expiry_date: '2025-06-30' }];
+    const reminders = generateApprovalReminders(list as any, [], now);
+    const r = reminders.find(x => x.id === '88-180');
+    expect(r?.approval_number).toBe('');
+    expect(r?.company_name).toBe('未指定公司');
+    expect(r?.message).toContain('未指定公司');
   });
 });

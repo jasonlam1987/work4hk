@@ -21,7 +21,7 @@
 {
   "uid": "uuid",
   "sha256": "...",
-  "stored_path": "/tmp/work4hk_files/data/...",
+  "stored_path": "C:\\Users\\88513\\iCloudDrive\\work4hk\\data\\...",
   "download_url": "/api/ai/files-download?uid=...&token=...",
   "token_expires_in": 600
 }

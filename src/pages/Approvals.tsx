@@ -5,7 +5,13 @@ import { Employer, getEmployers } from '../api/employers';
 import { Partner, getPartners } from '../api/settings';
 import Modal from '../components/Modal';
 import clsx from 'clsx';
-import { deleteManagedFile, downloadManagedFile, listManagedFiles, MAX_UPLOAD_SIZE, uploadManagedFile } from '../api/files';
+import { downloadManagedFile, listManagedFiles, MAX_UPLOAD_SIZE, uploadManagedFile } from '../api/files';
+import { normalizeErrorMessage } from '../utils/errorMessage';
+import { useUploadStore } from '../store/uploadStore';
+import { DeleteContext, permanentDeleteFile, requestDeleteFile } from '../api/fileDeletion';
+import { isSuperAdmin } from '../utils/authRole';
+import FileDeleteActionDialog from '../components/FileDeleteActionDialog';
+import { pushDeleteNotice } from '../utils/deleteNotifications';
 
 interface StoredApprovalFile {
   id: string;
@@ -16,6 +22,7 @@ interface StoredApprovalFile {
   size: number;
   mimeType?: string;
   downloadUrl?: string;
+  storedPath?: string;
   uploadTime: string;
 }
 
@@ -78,11 +85,18 @@ const Approvals: React.FC = () => {
   const [selectedApprovalForFiles, setSelectedApprovalForFiles] = useState<Approval | null>(null);
   const [activeFolder, setActiveFolder] = useState<string>(APPROVAL_FOLDERS[0]);
   const [storedFiles, setStoredFiles] = useState<StoredApprovalFile[]>([]);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteContext, setDeleteContext] = useState<DeleteContext | null>(null);
+  const superAdmin = isSuperAdmin();
   const uploadInputRef = useRef<HTMLInputElement>(null);
-  const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
-  const [uploadEta, setUploadEta] = useState<Record<string, number | null>>({});
-  const [uploadErrors, setUploadErrors] = useState<Record<string, string>>({});
-  const [pendingRetry, setPendingRetry] = useState<Record<string, File>>({});
+  const uploadScope = `approvals:${selectedApprovalForFiles?.id || 0}:${activeFolder}`;
+  const tasksByScope = useUploadStore(s => s.tasksByScope);
+  const beginTask = useUploadStore(s => s.beginTask);
+  const updateTask = useUploadStore(s => s.updateTask);
+  const failTask = useUploadStore(s => s.failTask);
+  const succeedTask = useUploadStore(s => s.succeedTask);
+  const clearScope = useUploadStore(s => s.clearScope);
+  const uploadTasks = useMemo(() => Object.values(tasksByScope[uploadScope] || {}), [tasksByScope, uploadScope]);
 
   const [employers, setEmployers] = useState<Employer[]>([]);
   const [partners, setPartners] = useState<Partner[]>([]);
@@ -201,6 +215,7 @@ const Approvals: React.FC = () => {
         size: it.size,
         mimeType: it.mime_type,
         downloadUrl: it.download_url,
+        storedPath: (it as any).stored_path,
         uploadTime: it.created_at ? new Date(it.created_at).toLocaleString() : new Date().toLocaleString(),
       })));
     }).catch(() => undefined);
@@ -453,6 +468,7 @@ const Approvals: React.FC = () => {
         size: it.size,
         mimeType: it.mime_type,
         downloadUrl: it.download_url,
+        storedPath: (it as any).stored_path,
         uploadTime: it.created_at ? new Date(it.created_at).toLocaleString() : new Date().toLocaleString(),
       })));
     }).catch(() => undefined);
@@ -469,8 +485,8 @@ const Approvals: React.FC = () => {
       return;
     }
     const key = `${file.name}-${file.size}-${Date.now()}`;
-    setUploadProgress(prev => ({ ...prev, [key]: 0 }));
-    setUploadErrors(prev => ({ ...prev, [key]: '' }));
+    beginTask(uploadScope, key, file.name, file);
+    updateTask(uploadScope, key, { percent: 0, error: '', remainingSeconds: null });
     try {
       const saved = await uploadManagedFile({
         module: 'approvals',
@@ -479,8 +495,7 @@ const Approvals: React.FC = () => {
         file,
         retries: 1,
         onProgress: ({ percent, remainingSeconds }) => {
-          setUploadProgress(prev => ({ ...prev, [key]: percent }));
-          setUploadEta(prev => ({ ...prev, [key]: remainingSeconds }));
+          updateTask(uploadScope, key, { percent, remainingSeconds });
         },
       });
       const row: StoredApprovalFile = {
@@ -492,16 +507,15 @@ const Approvals: React.FC = () => {
         size: saved.size,
         mimeType: saved.mime_type,
         downloadUrl: saved.download_url,
+        storedPath: (saved as any).stored_path,
         uploadTime: new Date().toLocaleString(),
       };
       writeStoredFiles([row, ...storedFiles]);
+      succeedTask(uploadScope, key);
       alert(`上傳成功：${saved.original_name}`);
     } catch (err: any) {
-      const message = String(err?.response?.data?.error || err?.message || '上傳失敗');
-      setUploadErrors(prev => ({ ...prev, [key]: message }));
-      setPendingRetry(prev => ({ ...prev, [key]: file }));
-    } finally {
-      setUploadProgress(prev => ({ ...prev, [key]: 100 }));
+      const message = normalizeErrorMessage(err, '上傳失敗');
+      failTask(uploadScope, key, message, file);
     }
   };
 
@@ -515,15 +529,36 @@ const Approvals: React.FC = () => {
   const handleDownloadFile = (file: StoredApprovalFile) => {
     if (!file.downloadUrl) return alert('下載連結不存在，請重新上傳');
     downloadManagedFile(file.downloadUrl, file.name).catch((err: any) => {
-      alert(String(err?.response?.data?.error || err?.message || '下載失敗'));
+      alert(normalizeErrorMessage(err, '下載失敗'));
     });
   };
 
   const handleDeleteFile = (id: string) => {
-    if (!window.confirm('確定要刪除這個檔案嗎？刪除後無法回復。')) return;
     const rec = storedFiles.find(f => f.id === id);
-    if (rec?.uid) deleteManagedFile(rec.uid).catch(() => undefined);
-    writeStoredFiles(storedFiles.filter(f => f.id !== id));
+    if (!rec?.uid) return;
+    setDeleteContext({
+      uid: rec.uid,
+      fileName: rec.name,
+      companyName: String(getEmployerDisplayById((selectedApprovalForFiles as any)?.employer_id, '-')),
+      module: 'approvals',
+      sectionName: activeFolder,
+      folder: activeFolder,
+      storedPath: rec.storedPath || '',
+    });
+    setDeleteDialogOpen(true);
+  };
+
+  const confirmPermanentDelete = async (ctx: DeleteContext) => {
+    await permanentDeleteFile(ctx.uid, 'DELETE');
+    writeStoredFiles(storedFiles.filter(f => f.uid !== ctx.uid));
+    alert('刪除完成');
+  };
+
+  const submitDeleteRequest = async (ctx: DeleteContext, reason: string) => {
+    const resp = await requestDeleteFile(ctx, reason);
+    const msg = String(resp?.message || '已提交刪除申請，等待超級管理員審核');
+    pushDeleteNotice({ at: Date.now(), message: msg, uid: ctx.uid, module: ctx.module });
+    alert(msg);
   };
 
   const cleanupApprovalFiles = (approvalId: number) => {
@@ -608,7 +643,7 @@ const Approvals: React.FC = () => {
 
   const validateQuotaRows = () => {
     const rows = quotaDetails.filter(r => !r._deleted);
-    if (rows.length === 0) return { ok: false, message: '請至少新增一筆配額明細' };
+    if (rows.length === 0) return { ok: false, message: '請至少新增一個配額數量' };
     const seqSet = new Set<string>();
     for (const r of rows) {
       const seq = String(r.quota_seq || '').replace(/[^\d]/g, '').padStart(4, '0').slice(-4);
@@ -818,7 +853,7 @@ const Approvals: React.FC = () => {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">批文編號</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">所屬僱主</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">簽署人</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">配額明細</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">配額數量</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">截止日期</th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
               </tr>
@@ -865,7 +900,7 @@ const Approvals: React.FC = () => {
                       {approval.signatory_name || '-'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-apple-dark">
-                      {getApprovalQuotaDetails(approval.id).length} 筆
+                      {getApprovalQuotaDetails(approval.id).length} 個
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         {formatDateDisplay((approval as any).expiry_date)}
@@ -942,7 +977,7 @@ const Approvals: React.FC = () => {
           <div className="bg-gray-900 rounded-apple w-full max-w-md p-6 shadow-xl border border-gray-800">
             <h3 className="text-white font-semibold text-sm mb-4">系統提示</h3>
             <p className="text-gray-200 text-base mb-8 leading-relaxed">
-              確定要刪除這筆配額明細嗎？刪除後將留下版本紀錄。
+              確定要刪除這個配額數量嗎？刪除後將留下版本紀錄。
             </p>
             <div className="flex justify-end space-x-3">
               <button
@@ -963,7 +998,7 @@ const Approvals: React.FC = () => {
                     appendApprovalVersionLog({
                       approval_id: selectedId,
                       action: 'quota_deleted',
-                      detail: `刪除配額明細：序號 ${String(seq).padStart(4, '0')}`,
+                      detail: `刪除配額數量：序號 ${String(seq).padStart(4, '0')}`,
                       operator: 'admin',
                     });
                   }
@@ -980,7 +1015,10 @@ const Approvals: React.FC = () => {
 
       <Modal
         isOpen={isFileModalOpen}
-        onClose={() => setIsFileModalOpen(false)}
+        onClose={() => {
+          clearScope(uploadScope);
+          setIsFileModalOpen(false);
+        }}
         title={`儲存空間 - 批文 ${String(selectedApprovalForFiles?.approval_number || '').toUpperCase()}`}
         className="max-w-4xl"
       >
@@ -1029,25 +1067,25 @@ const Approvals: React.FC = () => {
             </div>
 
             <div className="flex-1 overflow-y-auto p-4">
-              {Object.keys(uploadProgress).length > 0 && (
+              {uploadTasks.length > 0 && (
                 <div className="mb-3 space-y-2">
-                  {Object.entries(uploadProgress).map(([k, v]) => (
-                    <div key={k} className="p-2 border border-gray-200 rounded bg-gray-50">
+                  {uploadTasks.map((task) => (
+                    <div key={task.key} className="p-2 border border-gray-200 rounded bg-gray-50">
                       <div className="flex justify-between text-xs text-gray-600">
-                        <span className="truncate max-w-[70%]">{k}</span>
-                        <span>{Math.round(v)}%{uploadEta[k] && uploadEta[k]! > 0 ? ` · 剩餘 ${uploadEta[k]} 秒` : ''}</span>
+                        <span className="truncate max-w-[70%]">{task.name}</span>
+                        <span>{Math.round(task.percent)}%{task.remainingSeconds && task.remainingSeconds > 0 ? ` · 剩餘 ${task.remainingSeconds} 秒` : ''}</span>
                       </div>
                       <div className="h-2 bg-gray-200 rounded mt-1 overflow-hidden">
-                        <div className="h-2 bg-apple-blue" style={{ width: `${v}%` }} />
+                        <div className="h-2 bg-apple-blue" style={{ width: `${task.percent}%` }} />
                       </div>
-                      {uploadErrors[k] && (
+                      {task.error && (
                         <div className="flex items-center justify-between mt-1">
-                          <span className="text-xs text-red-600">{uploadErrors[k]}</span>
-                          {pendingRetry[k] && (
+                          <span className="text-xs text-red-600">{task.error}</span>
+                          {task.retryFile && (
                             <button
                               type="button"
                               className="text-xs px-2 py-0.5 rounded bg-red-50 text-red-700 hover:bg-red-100"
-                              onClick={() => doUpload(pendingRetry[k])}
+                              onClick={() => doUpload(task.retryFile!)}
                             >
                               重試
                             </button>
@@ -1087,14 +1125,25 @@ const Approvals: React.FC = () => {
                           >
                             <Download className="w-4 h-4" />
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteFile(file.id)}
-                            className="p-1.5 text-gray-500 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors"
-                            title="刪除"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          {superAdmin ? (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteFile(file.id)}
+                              className="p-1.5 text-gray-500 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors"
+                              title="刪除"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteFile(file.id)}
+                              className="px-2 py-1 text-xs rounded border border-amber-300 text-amber-700 hover:bg-amber-50"
+                              title="申請刪除"
+                            >
+                              申請刪除
+                            </button>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -1104,6 +1153,14 @@ const Approvals: React.FC = () => {
           </div>
         </div>
       </Modal>
+
+      <FileDeleteActionDialog
+        isOpen={deleteDialogOpen}
+        onClose={() => setDeleteDialogOpen(false)}
+        context={deleteContext}
+        onConfirmPermanentDelete={confirmPermanentDelete}
+        onSubmitRequest={submitDeleteRequest}
+      />
 
       {/* Approval Modal */}
       <Modal 
@@ -1286,7 +1343,7 @@ const Approvals: React.FC = () => {
 
           <div className="bg-white/50 border border-gray-200/50 rounded-apple-sm p-4">
             <div className="flex items-center justify-between mb-3">
-              <div className="text-sm font-semibold text-gray-800">配額明細</div>
+              <div className="text-sm font-semibold text-gray-800">配額數量</div>
               <button
                 type="button"
                 onClick={() => setQuotaDetails(prev => [...prev, emptyQuotaRow()])}

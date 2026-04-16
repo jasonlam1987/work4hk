@@ -9,7 +9,8 @@
   - `headcount`（配額數量）
   - `valid_until`（有效期限）
 - 新增：
-  - `quota_details[]`
+  - `quota_details[]`（前端標示名稱：配額數量）
+  - `quota_quantity`（整數，對應「配額數量」）
 
 ## 2. department 規則
 - 允許值：`勞工處` / `發展局` / `機管局` / `福利處` / `運輸署`

@@ -3,11 +3,65 @@ import react from '@vitejs/plugin-react'
 import tsconfigPaths from "vite-tsconfig-paths";
 import { traeBadgePlugin } from 'vite-plugin-trae-solo-badge';
 import { extractBrOcrFields } from './server/brOcrExtract'
+import filesHandler from './api/ai/files'
+import filesDownloadHandler from './api/ai/files-download'
+import workerFilesHandler from './api/ai/worker-files'
+import csrfHandler from './api/ai/csrf'
+import filesDeleteHandler from './api/ai/files-delete'
+import filesDeleteRequestHandler from './api/ai/files-delete-request'
+import filesDeleteReviewHandler from './api/ai/files-delete-review'
+import filesDeleteRequestsHandler from './api/ai/files-delete-requests'
 
 const brOcrDevPlugin = () => {
   return {
     name: 'br-ocr-dev',
     configureServer(server: any) {
+      const attachQuery = (req: any) => {
+        const rawUrl = String(req?.url || '');
+        const u = new URL(rawUrl, 'http://localhost');
+        req.query = Object.fromEntries(u.searchParams.entries());
+      };
+
+      server.middlewares.use('/api/ai/files', async (req: any, res: any) => {
+        attachQuery(req);
+        return filesHandler(req, res);
+      });
+
+      server.middlewares.use('/api/ai/files-download', async (req: any, res: any) => {
+        attachQuery(req);
+        return filesDownloadHandler(req, res);
+      });
+
+      server.middlewares.use('/api/ai/worker-files', async (req: any, res: any) => {
+        attachQuery(req);
+        return workerFilesHandler(req, res);
+      });
+
+      server.middlewares.use('/api/ai/csrf', async (req: any, res: any) => {
+        attachQuery(req);
+        return csrfHandler(req, res);
+      });
+
+      server.middlewares.use('/api/ai/files-delete', async (req: any, res: any) => {
+        attachQuery(req);
+        return filesDeleteHandler(req, res);
+      });
+
+      server.middlewares.use('/api/ai/files-delete-request', async (req: any, res: any) => {
+        attachQuery(req);
+        return filesDeleteRequestHandler(req, res);
+      });
+
+      server.middlewares.use('/api/ai/files-delete-review', async (req: any, res: any) => {
+        attachQuery(req);
+        return filesDeleteReviewHandler(req, res);
+      });
+
+      server.middlewares.use('/api/ai/files-delete-requests', async (req: any, res: any) => {
+        attachQuery(req);
+        return filesDeleteRequestsHandler(req, res);
+      });
+
       server.middlewares.use('/api/ai/br-ocr', async (req: any, res: any) => {
         if (req.method !== 'POST') {
           res.statusCode = 405

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { LogIn, Loader2, ShieldCheck, User, Lock, QrCode } from 'lucide-react';
 import apiClient from '../api/client';
@@ -18,8 +18,15 @@ const Login: React.FC = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const formRef = useRef<HTMLFormElement | null>(null);
   const navigate = useNavigate();
   const setAuth = useAuthStore((state) => state.setAuth);
+
+  const submitOnEnter = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    formRef.current?.requestSubmit();
+  };
 
   const getFriendlyLoginError = (err: unknown) => {
     const e = err as HttpErrorLike;
@@ -151,7 +158,7 @@ const Login: React.FC = () => {
             </div>
           )}
 
-          <form onSubmit={handleLogin} className="space-y-5">
+          <form ref={formRef} onSubmit={handleLogin} className="space-y-5">
             <div className="space-y-1.5">
               <label className="block text-sm font-medium text-gray-700">帳號</label>
               <div className="relative">
@@ -162,6 +169,7 @@ const Login: React.FC = () => {
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
+                  onKeyDown={submitOnEnter}
                   autoComplete="username"
                   spellCheck={false}
                   inputMode="text"
@@ -182,6 +190,7 @@ const Login: React.FC = () => {
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
+                  onKeyDown={submitOnEnter}
                   autoComplete="current-password"
                   className="w-full h-12 pl-10 pr-4 bg-white/70 border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/40 focus:border-apple-blue transition-all"
                   placeholder="請輸入密碼"

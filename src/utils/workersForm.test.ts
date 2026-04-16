@@ -15,6 +15,7 @@ describe('workersForm utils', () => {
   it('normalizes date', () => {
     expect(normalizeDate('2025/12/13')).toBe('2025-12-13');
     expect(normalizeDate('2025-12-13')).toBe('2025-12-13');
+    expect(normalizeDate('')).toBe('');
   });
 
   it('validates mainland id', () => {
@@ -58,6 +59,7 @@ describe('workersForm utils', () => {
     expect(parseEmploymentMonths('')).toBe('');
     expect(parseEmploymentMonths('abc')).toBe('');
     expect(parseEmploymentMonths('0')).toBe('');
+    expect(parseEmploymentMonths(undefined)).toBe('');
     expect(formatEmploymentMonths('')).toBe('');
   });
 });

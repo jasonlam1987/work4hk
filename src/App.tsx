@@ -11,6 +11,7 @@ import Workers from './pages/Workers';
 import Jobs from './pages/Jobs';
 import Approvals from './pages/Approvals';
 import Settings from './pages/Settings';
+import DeletionApprovals from './pages/DeletionApprovals';
 import { useAuthStore } from './store/authStore';
 
 // Private Route for EST
@@ -38,6 +39,7 @@ function App() {
           <Route path="workers" element={<Workers />} />
           <Route path="jobs" element={<Jobs />} />
           <Route path="approvals" element={<Approvals />} />
+          <Route path="deletion-approvals" element={<DeletionApprovals />} />
           <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>

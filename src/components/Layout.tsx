@@ -9,6 +9,7 @@ import {
   FileText, 
   LogOut,
   Settings,
+  ShieldCheck,
   Menu,
   X
 } from 'lucide-react';
@@ -31,6 +32,7 @@ const Layout: React.FC = () => {
     { to: '/approvals', icon: FileText, label: '批文管理' },
     { to: '/workers', icon: Users, label: '勞工管理' },
     { to: '/jobs', icon: Briefcase, label: '職位管理' },
+    { to: '/deletion-approvals', icon: ShieldCheck, label: '審批管理' },
     { to: '/settings', icon: Settings, label: '系統設定' },
   ];
 

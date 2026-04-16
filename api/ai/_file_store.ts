@@ -1,15 +1,19 @@
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { ensureStorageReady } from './_storage_root';
 
 export const MAX_SIZE = 10 * 1024 * 1024;
 export const ALLOWED = new Set(['application/pdf', 'image/jpeg', 'image/png']);
-export const ROOT = '/tmp/work4hk_files';
-export const TMP_DIR = path.join(ROOT, 'tmp');
-export const DATA_DIR = path.join(ROOT, 'data');
-export const INDEX_FILE = path.join(ROOT, 'index.json');
+const READY = await ensureStorageReady();
+export const ROOT = READY.paths.root;
+export const TMP_DIR = READY.paths.tmpDir;
+export const DATA_DIR = READY.paths.dataDir;
+export const INDEX_FILE = READY.paths.indexFile;
+export const DELETE_CONFIRM_TEXT = 'DELETE';
 const TOKEN_SECRET = process.env.FILE_TOKEN_SECRET || 'work4hk-file-secret';
 const TOKEN_TTL_SEC = 10 * 60;
+const LOG_KEEP_DAYS = 30;
 
 export type FileRecord = {
   uid: string;
@@ -29,9 +33,52 @@ export type FileRecord = {
 export type FileIndex = {
   records: Record<string, FileRecord>;
   used_tokens: Record<string, string>;
+  delete_requests: Record<string, FileDeleteRequest>;
+  audit_logs: FileAuditLog[];
+};
+
+export type DeleteRequestStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
+
+export type FileDeleteRequest = {
+  request_id: string;
+  uid: string;
+  module: FileRecord['module'];
+  owner_id: number;
+  folder: string;
+  original_name: string;
+  stored_path: string;
+  reason: string;
+  status: DeleteRequestStatus;
+  requester_id: string;
+  requester_name: string;
+  reviewer_id?: string;
+  reviewer_name?: string;
+  reject_reason?: string;
+  created_at: string;
+  reviewed_at?: string;
+};
+
+export type FileAuditLog = {
+  id: string;
+  event:
+    | 'DELETE_REQUEST_CREATED'
+    | 'DELETE_REQUEST_APPROVED'
+    | 'DELETE_REQUEST_REJECTED'
+    | 'FILE_PHYSICALLY_DELETED'
+    | 'FILE_DELETE_FAILED';
+  operator_id: string;
+  operator_name: string;
+  uid: string;
+  request_id?: string;
+  original_path: string;
+  ip: string;
+  user_agent: string;
+  created_at: string;
+  detail?: string;
 };
 
 export const ensureDirs = async () => {
+  await ensureStorageReady();
   await fs.mkdir(ROOT, { recursive: true });
   await fs.mkdir(TMP_DIR, { recursive: true });
   await fs.mkdir(DATA_DIR, { recursive: true });
@@ -51,13 +98,21 @@ export const readIndex = async (): Promise<FileIndex> => {
     return {
       records: parsed?.records && typeof parsed.records === 'object' ? parsed.records : {},
       used_tokens: parsed?.used_tokens && typeof parsed.used_tokens === 'object' ? parsed.used_tokens : {},
+      delete_requests: parsed?.delete_requests && typeof parsed.delete_requests === 'object' ? parsed.delete_requests : {},
+      audit_logs: Array.isArray(parsed?.audit_logs) ? parsed.audit_logs : [],
     };
   } catch {
-    return { records: {}, used_tokens: {} };
+    return { records: {}, used_tokens: {}, delete_requests: {}, audit_logs: [] };
   }
 };
 
 export const writeIndex = async (idx: FileIndex) => {
+  const now = Date.now();
+  idx.audit_logs = (idx.audit_logs || []).filter((item) => {
+    const t = Date.parse(String(item?.created_at || ''));
+    if (!Number.isFinite(t)) return false;
+    return now - t <= LOG_KEEP_DAYS * 24 * 60 * 60 * 1000;
+  });
   await fs.writeFile(INDEX_FILE, JSON.stringify(idx), 'utf8');
 };
 
@@ -68,8 +123,95 @@ export const respond = (res: any, status: number, body: any) => {
 };
 
 export const verifyRole = (req: any) => {
-  const role = String(req?.headers?.['x-user-role'] || '').toLowerCase();
-  return ['admin', 'super_admin', 'manager'].includes(role);
+  const roleRaw = String(req?.headers?.['x-user-role'] || '').trim().toLowerCase();
+  const role = roleRaw.replace(/[\s-]+/g, '_');
+  const auth = String(req?.headers?.authorization || '').trim().toLowerCase();
+  if (!role) return auth.startsWith('bearer ');
+  if (role.includes('admin') || role.includes('manager')) return true;
+  if (['system_admin', 'administrator', '系統管理員', '系统管理员', '管理員', '管理员'].includes(roleRaw)) return true;
+  return false;
+};
+
+export const parseRole = (req: any) => String(req?.headers?.['x-user-role'] || '').trim().toLowerCase();
+export const parseUserId = (req: any) => String(req?.headers?.['x-user-id'] || '').trim() || 'unknown';
+export const parseUserName = (req: any) => String(req?.headers?.['x-user-name'] || '').trim() || 'unknown';
+export const parseIp = (req: any) =>
+  String(req?.headers?.['x-forwarded-for'] || req?.socket?.remoteAddress || '')
+    .split(',')[0]
+    .trim() || 'unknown';
+export const parseUserAgent = (req: any) => String(req?.headers?.['user-agent'] || '').trim() || 'unknown';
+
+export const isSuperAdminRole = (roleRaw: string) => {
+  const role = String(roleRaw || '').toLowerCase();
+  return (
+    role.includes('super_admin') ||
+    role.includes('superadmin') ||
+    role.includes('root') ||
+    role.includes('超級管理員') ||
+    role.includes('超级管理员')
+  );
+};
+
+export const verifySuperAdmin = (req: any) => isSuperAdminRole(parseRole(req));
+
+export const verifyCsrf = (req: any) => {
+  const tokenHeader = String(req?.headers?.['x-csrf-token'] || '').trim();
+  const cookieRaw = String(req?.headers?.cookie || '');
+  const match = cookieRaw.match(/(?:^|;\s*)csrf_token=([^;]+)/);
+  const cookieToken = match?.[1] ? decodeURIComponent(match[1]) : '';
+  return Boolean(tokenHeader && cookieToken && tokenHeader === cookieToken);
+};
+
+export const issueCsrfToken = () => randomUUID().replace(/-/g, '');
+
+export const appendAuditLog = (idx: FileIndex, log: Omit<FileAuditLog, 'id' | 'created_at'>) => {
+  idx.audit_logs = idx.audit_logs || [];
+  idx.audit_logs.push({
+    id: randomUUID(),
+    created_at: new Date().toISOString(),
+    ...log,
+  });
+};
+
+export const createDeleteRequestRecord = (input: {
+  rec: FileRecord;
+  reason: string;
+  requester_id: string;
+  requester_name: string;
+}) => {
+  const requestId = randomUUID();
+  const out: FileDeleteRequest = {
+    request_id: requestId,
+    uid: input.rec.uid,
+    module: input.rec.module,
+    owner_id: input.rec.owner_id,
+    folder: input.rec.folder,
+    original_name: input.rec.original_name,
+    stored_path: input.rec.stored_path,
+    reason: input.reason,
+    status: 'PENDING',
+    requester_id: input.requester_id,
+    requester_name: input.requester_name,
+    created_at: new Date().toISOString(),
+  };
+  return out;
+};
+
+const safeUnlink = async (p: string) => {
+  try {
+    await fs.unlink(p);
+  } catch {
+    // ignore
+  }
+};
+
+export const deletePhysicalFileAndArtifacts = async (rec: FileRecord) => {
+  await safeUnlink(rec.stored_path);
+  const tmpCandidates = [
+    path.join(TMP_DIR, `${rec.uid}.tmp`),
+    path.join(TMP_DIR, rec.stored_name),
+  ];
+  for (const p of tmpCandidates) await safeUnlink(p);
 };
 
 const sign = (payload: string) => createHmac('sha256', TOKEN_SECRET).update(payload).digest('hex');

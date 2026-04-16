@@ -3,7 +3,7 @@
 本專案為 Work4HK 勞務管理系統的前端（React + TypeScript + Vite），包含：
 - 用戶登入（密碼登入 + 微信登入入口）
 - 僱主 / 勞工 / 職位 / 批文管理
-- 批文與僱主的「儲存空間」檔案庫（本機瀏覽器儲存）
+- 批文與僱主的「儲存空間」檔案庫（伺服器檔案存儲）
 - BR 商業登記證 OCR（前端上傳圖片 → 雲端 function → 騰訊 OCR）
 
 ## 本機開發
@@ -21,6 +21,16 @@ npm run dev
 ```
 
 預設網址：`http://localhost:5176/`
+
+## 檔案存儲路徑
+
+- 基準路徑由 `FILE_STORAGE_ROOT` 控制，預設為：
+  - `C:\Users\88513\iCloudDrive\work4hk`
+- 一次性遷移舊資料：
+
+```bash
+npm run migrate:storage
+```
 
 ## 雲端（Vercel）
 
