@@ -7,7 +7,12 @@ const enabled = Boolean(supabaseUrl && supabaseServiceRoleKey);
 export const isSupabaseStorageEnabled = () => enabled;
 
 const encodePath = (p: string) => String(p || '').split('/').map(encodeURIComponent).join('/');
-const safeSegment = (v: string) => String(v || '').replace(/[^\w.\-]/g, '_');
+const safeFileName = (v: string) =>
+  String(v || 'file')
+    .replace(/[\/\\]/g, '_')
+    .replace(/[\u0000-\u001F\u007F]/g, '_')
+    .trim() || 'file';
+const folderSegment = (folder: string) => `f_${Buffer.from(String(folder || ''), 'utf8').toString('base64url')}`;
 
 const baseHeaders = () => ({
   apikey: supabaseServiceRoleKey,
@@ -21,12 +26,12 @@ export const getSupabaseObjectPath = (
   uid: string,
   fileName: string
 ) => {
-  const safeName = safeSegment(fileName || 'file');
-  return `${moduleName}/${ownerId}/${safeSegment(folder)}/${uid}__${safeName}`;
+  const safeName = safeFileName(fileName);
+  return `${moduleName}/${ownerId}/${folderSegment(folder)}/${uid}__${safeName}`;
 };
 
 export const getSupabaseFolderPrefix = (moduleName: string, ownerId: number, folder: string) =>
-  `${moduleName}/${ownerId}/${safeSegment(folder)}/`;
+  `${moduleName}/${ownerId}/${folderSegment(folder)}/`;
 
 export const listSupabaseStorageByPrefix = async (prefix: string) => {
   if (!enabled) throw new Error('supabase storage not configured');
