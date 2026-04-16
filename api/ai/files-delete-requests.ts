@@ -1,4 +1,4 @@
-import { ensureDirs, parseRole, readIndex, respond, verifyRole } from './_file_store.js';
+import { ensureDirs, parseRole, parseUserId, readIndex, respond, verifyRole } from './_file_store.js';
 
 export const config = {
   runtime: 'nodejs',
@@ -11,10 +11,13 @@ export default async function handler(req: any, res: any) {
     await ensureDirs();
     const idx = await readIndex();
     const role = parseRole(req);
+    const userId = parseUserId(req);
     const all = Object.values(idx.delete_requests || {}).sort((a: any, b: any) =>
       String(b.created_at || '').localeCompare(String(a.created_at || ''))
     );
-    const items = role.includes('super') ? all : all.filter((it: any) => it.status === 'PENDING');
+    const items = role.includes('super')
+      ? all
+      : all.filter((it: any) => String(it.requester_id || '') === String(userId || ''));
     return respond(res, 200, { items });
   } catch (e: any) {
     return respond(res, 500, { code: 'LIST_FAILED', error: 'list failed', detail: String(e?.message || e) });

@@ -39,9 +39,8 @@ export default async function handler(req: any, res: any) {
     row.reviewed_at = new Date().toISOString();
 
     if (action === 'REJECT') {
-      if (rejectReason.length < 2) return respond(res, 400, { code: 'INVALID_REJECT_REASON', error: '請輸入拒絕原因' });
       row.status = 'REJECTED';
-      row.reject_reason = rejectReason;
+      row.reject_reason = rejectReason || '';
       idx.delete_requests[requestId] = row;
       appendAuditLog(idx, {
         event: 'DELETE_REQUEST_REJECTED',
@@ -61,10 +60,29 @@ export default async function handler(req: any, res: any) {
     if (action !== 'APPROVE') return respond(res, 400, { code: 'INVALID_ACTION', error: 'invalid action' });
 
     const rec = idx.records?.[row.uid];
-    if (!rec || rec.deleted_at) return respond(res, 404, { code: 'FILE_NOT_FOUND', error: 'file not found' });
-    await deletePhysicalFileAndArtifacts(rec);
-    rec.deleted_at = new Date().toISOString();
-    idx.records[row.uid] = rec;
+    const recForDelete =
+      rec ||
+      ({
+        uid: row.uid,
+        module: row.module,
+        owner_id: row.owner_id,
+        folder: row.folder,
+        original_name: row.original_name,
+        mime_type: 'application/octet-stream',
+        size: 0,
+        sha256: '',
+        stored_name: '',
+        stored_path: row.stored_path,
+        storage_backend: row.storage_object_path ? 'supabase' : 'local',
+        storage_object_path: row.storage_object_path,
+        created_at: row.created_at,
+      } as any);
+    if (rec?.deleted_at) return respond(res, 404, { code: 'FILE_NOT_FOUND', error: 'file not found' });
+    await deletePhysicalFileAndArtifacts(recForDelete);
+    if (rec) {
+      rec.deleted_at = new Date().toISOString();
+      idx.records[row.uid] = rec;
+    }
     row.status = 'APPROVED';
     idx.delete_requests[requestId] = row;
 

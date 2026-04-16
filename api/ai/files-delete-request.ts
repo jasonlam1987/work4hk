@@ -31,10 +31,19 @@ export default async function handler(req: any, res: any) {
     const reason = String(body?.reason || '').trim();
     const companyName = String(body?.company_name || '').trim();
     const sectionName = String(body?.section_name || '').trim();
+    const objectPath = String(body?.object_path || '').trim();
+    const moduleName = String(body?.module || '').trim() as any;
+    const ownerId = Number(body?.owner_id || 0);
+    const folder = String(body?.folder || '').trim();
+    const fileName = String(body?.file_name || '').trim();
+    const storedPath = String(body?.stored_path || '').trim();
+    const uploaderIdFromBody = String(body?.uploader_id || '').trim();
+    const uploaderNameFromBody = String(body?.uploader_name || '').trim().toLowerCase();
     if (!uid) return respond(res, 400, { code: 'MISSING_UID', error: 'missing uid' });
     if (reason.length < 3) return respond(res, 400, { code: 'INVALID_REASON', error: '請填寫刪除理由（至少 3 字）' });
     const rec = idx.records?.[uid];
-    if (!rec || rec.deleted_at) return respond(res, 404, { code: 'FILE_NOT_FOUND', error: 'file not found' });
+    if (!rec && !objectPath) return respond(res, 404, { code: 'FILE_NOT_FOUND', error: 'file not found' });
+    if (rec?.deleted_at) return respond(res, 404, { code: 'FILE_NOT_FOUND', error: 'file not found' });
 
     if (verifySuperAdmin(req)) {
       return respond(res, 400, { code: 'SUPER_ADMIN_SHOULD_DELETE_DIRECTLY', error: 'super admin should call delete endpoint' });
@@ -42,8 +51,8 @@ export default async function handler(req: any, res: any) {
 
     const requesterId = parseUserId(req);
     const requesterName = String(parseUserName(req) || '').trim().toLowerCase();
-    const uploaderId = String((rec as any)?.uploader_id || '').trim();
-    const uploaderName = String((rec as any)?.uploader_name || '').trim().toLowerCase();
+    const uploaderId = String((rec as any)?.uploader_id || uploaderIdFromBody).trim();
+    const uploaderName = String((rec as any)?.uploader_name || uploaderNameFromBody).trim().toLowerCase();
     const hasIdMatch = Boolean(requesterId && uploaderId && requesterId === uploaderId);
     const hasNameMatch = Boolean(requesterName && uploaderName && requesterName === uploaderName);
     if (!hasIdMatch && !hasNameMatch) {
@@ -58,25 +67,46 @@ export default async function handler(req: any, res: any) {
     );
     if (dup) return respond(res, 409, { code: 'DUPLICATE_PENDING_REQUEST', error: '已有待審核刪除申請' });
 
+    const baseRec = rec || {
+      uid,
+      module: moduleName || 'employers',
+      owner_id: ownerId || 0,
+      folder: folder || sectionName || '',
+      original_name: fileName || uid,
+      mime_type: 'application/octet-stream',
+      size: 0,
+      sha256: '',
+      stored_name: '',
+      stored_path: storedPath || (objectPath ? `supabase://${objectPath}` : ''),
+      storage_backend: objectPath ? 'supabase' : 'local',
+      storage_object_path: objectPath || undefined,
+      uploader_id: uploaderId || undefined,
+      uploader_name: uploaderName || undefined,
+      created_at: new Date().toISOString(),
+    } as any;
+
     const row = createDeleteRequestRecord({
-      rec,
+      rec: baseRec,
       reason,
       requester_id: requesterId,
+      requester_account: requesterId,
       requester_name: parseUserName(req),
+      company_name: companyName,
+      section_name: sectionName,
     });
     idx.delete_requests[row.request_id] = row;
 
-    const msg = `用戶 ${row.requester_name} 於 ${row.created_at} 申請刪除 ${companyName || '-'} 隸屬 ${sectionName || row.folder} 的檔案 ${row.original_name}`;
+    const msg = '已向超級管理員申請刪除，待批准後將自動刪除';
     appendAuditLog(idx, {
       event: 'DELETE_REQUEST_CREATED',
       operator_id: row.requester_id,
       operator_name: row.requester_name,
       uid,
       request_id: row.request_id,
-      original_path: rec.stored_path,
+      original_path: String(baseRec.stored_path || ''),
       ip: parseIp(req),
       user_agent: parseUserAgent(req),
-      detail: `${msg}; reason=${reason}`,
+      detail: `${companyName || '-'} / ${sectionName || row.folder} / ${row.original_name}; reason=${reason}`,
     });
     await writeIndex(idx);
     return respond(res, 200, { ok: true, code: 'DELETE_REQUEST_CREATED', request: row, message: msg });

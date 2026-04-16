@@ -48,7 +48,7 @@ const makeFile = async () => {
     file_name: 'a.pdf',
     mime_type: 'application/pdf',
     data_url: `data:application/pdf;base64,${Buffer.from('hello', 'utf8').toString('base64')}`,
-  });
+  }, { user_id: 'u-1', user_name: 'tester' });
   const idx = await readIndex();
   idx.records[rec.uid] = rec;
   await writeIndex(idx);
@@ -124,5 +124,32 @@ describe('file delete security flow', () => {
     const approvedAgain = JSON.parse(String(approveAgainRes.state.body || '{}'));
     expect(approveAgainRes.statusCode).toBe(409);
     expect(approvedAgain.code).toBe('REQUEST_ALREADY_REVIEWED');
+  });
+
+  it('rejects request and keeps file record undeleted', async () => {
+    await ensureDirs();
+    await writeIndex({ records: {}, used_tokens: {}, delete_requests: {}, audit_logs: [] });
+    const uid = await makeFile();
+
+    const createReq = makeReq(
+      'POST',
+      { uid, reason: '資料重複', company_name: 'A 公司', section_name: '企業資料' },
+      roleHeaders('manager')
+    );
+    const createRes = makeRes();
+    await filesDeleteRequestHandler(createReq, createRes);
+    const created = JSON.parse(String(createRes.state.body || '{}'));
+    const requestId = created?.request?.request_id;
+
+    const rejectReq = makeReq('POST', { request_id: requestId, action: 'REJECT' }, roleHeaders('super_admin'));
+    const rejectRes = makeRes();
+    await filesDeleteReviewHandler(rejectReq, rejectRes);
+    const rejected = JSON.parse(String(rejectRes.state.body || '{}'));
+    expect(rejectRes.statusCode).toBe(200);
+    expect(rejected.code).toBe('REQUEST_REJECTED');
+
+    const idx = await readIndex();
+    expect(idx.records[uid]?.deleted_at).toBeUndefined();
+    expect(idx.delete_requests[requestId]?.status).toBe('REJECTED');
   });
 });

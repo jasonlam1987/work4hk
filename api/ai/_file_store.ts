@@ -55,11 +55,16 @@ export type FileDeleteRequest = {
   module: FileRecord['module'];
   owner_id: number;
   folder: string;
+  section_name?: string;
+  company_name?: string;
+  request_type?: 'DELETE_ATTACHMENT';
   original_name: string;
   stored_path: string;
+  storage_object_path?: string;
   reason: string;
   status: DeleteRequestStatus;
   requester_id: string;
+  requester_account?: string;
   requester_name: string;
   reviewer_id?: string;
   reviewer_name?: string;
@@ -187,7 +192,10 @@ export const createDeleteRequestRecord = (input: {
   rec: FileRecord;
   reason: string;
   requester_id: string;
+  requester_account?: string;
   requester_name: string;
+  company_name?: string;
+  section_name?: string;
 }) => {
   const requestId = randomUUID();
   const out: FileDeleteRequest = {
@@ -196,11 +204,16 @@ export const createDeleteRequestRecord = (input: {
     module: input.rec.module,
     owner_id: input.rec.owner_id,
     folder: input.rec.folder,
+    section_name: input.section_name || input.rec.folder,
+    company_name: input.company_name || '',
+    request_type: 'DELETE_ATTACHMENT',
     original_name: input.rec.original_name,
     stored_path: input.rec.stored_path,
+    storage_object_path: input.rec.storage_object_path,
     reason: input.reason,
     status: 'PENDING',
     requester_id: input.requester_id,
+    requester_account: input.requester_account || input.requester_id,
     requester_name: input.requester_name,
     created_at: new Date().toISOString(),
   };

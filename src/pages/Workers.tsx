@@ -11,7 +11,7 @@ import { downloadManagedFile, MAX_UPLOAD_SIZE } from '../api/files';
 import { PHONE_CODES, labourStatusOptions, labourStatusToApi, labourStatusToUi, normalizeDate, isMainlandId, isPhoneNumber, mergePhone, formatEmploymentMonths, parseEmploymentMonths } from '../utils/workersForm';
 import { normalizeErrorMessage } from '../utils/errorMessage';
 import { useUploadStore } from '../store/uploadStore';
-import { DeleteContext, permanentDeleteFile, requestDeleteFile } from '../api/fileDeletion';
+import { DeleteContext, listDeleteRequests, permanentDeleteFile, requestDeleteFile } from '../api/fileDeletion';
 import { getAuthIdentity, isSuperAdmin } from '../utils/authRole';
 import FileDeleteActionDialog from '../components/FileDeleteActionDialog';
 import { pushDeleteNotice } from '../utils/deleteNotifications';
@@ -102,6 +102,7 @@ const Workers: React.FC = () => {
   const [deleteTarget, setDeleteTarget] = useState<Worker | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteContext, setDeleteContext] = useState<DeleteContext | null>(null);
+  const [deleteStatusByUid, setDeleteStatusByUid] = useState<Record<string, 'PENDING' | 'APPROVED' | 'REJECTED'>>({});
   const superAdmin = isSuperAdmin();
   const authIdentity = getAuthIdentity();
 
@@ -235,6 +236,31 @@ const Workers: React.FC = () => {
     } catch {
     }
   }, [storedFiles]);
+
+  useEffect(() => {
+    if (!isFileModalOpen || !selectedWorkerForFiles || superAdmin) return;
+    let canceled = false;
+    const loadDeleteStatuses = async () => {
+      try {
+        const rows = await listDeleteRequests();
+        if (canceled) return;
+        const next: Record<string, 'PENDING' | 'APPROVED' | 'REJECTED'> = {};
+        for (const row of rows) {
+          if (String(row.module) !== 'workers') continue;
+          if (Number(row.owner_id || 0) !== Number(selectedWorkerForFiles.id)) continue;
+          if (!next[row.uid]) next[row.uid] = row.status;
+        }
+        setDeleteStatusByUid(next);
+      } catch {
+      }
+    };
+    loadDeleteStatuses();
+    const timer = window.setInterval(loadDeleteStatuses, 8000);
+    return () => {
+      canceled = true;
+      window.clearInterval(timer);
+    };
+  }, [isFileModalOpen, selectedWorkerForFiles, superAdmin]);
 
   const filteredEmployers = useMemo(() => {
     const q = employerQuery.trim().toLowerCase();
@@ -432,10 +458,13 @@ const Workers: React.FC = () => {
       fileName: target.name,
       companyName: selectedWorkerForFiles?.labour_name || '-',
       module: 'workers',
+      ownerId: selectedWorkerForFiles?.id || 0,
       sectionName: activeFolder,
       folder: activeFolder,
       storedPath: target.storedPath || '',
       objectPath: target.objectPath || '',
+      uploaderId: target.uploaderId || '',
+      uploaderName: target.uploaderName || '',
     });
     setDeleteDialogOpen(true);
   };
@@ -459,6 +488,7 @@ const Workers: React.FC = () => {
 
   const submitDeleteRequest = async (ctx: DeleteContext, reason: string) => {
     const resp = await requestDeleteFile(ctx, reason);
+    setDeleteStatusByUid(prev => ({ ...prev, [ctx.uid]: 'PENDING' }));
     const msg = String(resp?.message || '已提交刪除申請，等待超級管理員審核');
     pushDeleteNotice({ at: Date.now(), message: msg, uid: ctx.uid, module: ctx.module });
     alert(msg);
@@ -1716,16 +1746,34 @@ const Workers: React.FC = () => {
                           ) : (
                             <button
                               onClick={() => handleDeleteStoredFile(file.id, file.uid)}
-                              disabled={!canRequestDeleteFile(file)}
+                              disabled={
+                                !canRequestDeleteFile(file) ||
+                                deleteStatusByUid[file.uid] === 'PENDING' ||
+                                deleteStatusByUid[file.uid] === 'APPROVED'
+                              }
                               className={clsx(
                                 "px-2 py-1 text-xs rounded border",
-                                canRequestDeleteFile(file)
+                                canRequestDeleteFile(file) &&
+                                  deleteStatusByUid[file.uid] !== 'PENDING' &&
+                                  deleteStatusByUid[file.uid] !== 'APPROVED'
                                   ? "border-amber-300 text-amber-700 hover:bg-amber-50"
                                   : "border-gray-200 text-gray-400 bg-gray-100 cursor-not-allowed"
                               )}
-                              title={canRequestDeleteFile(file) ? "申請刪除" : "僅上傳者可申請刪除"}
+                              title={
+                                deleteStatusByUid[file.uid] === 'PENDING'
+                                  ? "待審批"
+                                  : deleteStatusByUid[file.uid] === 'APPROVED'
+                                    ? "已刪除"
+                                    : canRequestDeleteFile(file)
+                                      ? "申請刪除"
+                                      : "僅上傳者可申請刪除"
+                              }
                             >
-                              申請刪除
+                              {deleteStatusByUid[file.uid] === 'PENDING'
+                                ? '待刪'
+                                : deleteStatusByUid[file.uid] === 'APPROVED'
+                                  ? '已刪除'
+                                  : '申請刪除'}
                             </button>
                           )}
                         </div>

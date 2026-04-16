@@ -7,23 +7,31 @@ export type DeleteContext = {
   fileName: string;
   companyName: string;
   module: FileModule;
+  ownerId?: number;
   sectionName: string;
   folder: string;
   storedPath?: string;
   objectPath?: string;
+  uploaderId?: string;
+  uploaderName?: string;
 };
 
 export type DeleteRequestRecord = {
   request_id: string;
   uid: string;
+  request_type?: 'DELETE_ATTACHMENT';
   module: FileModule;
   owner_id: number;
   folder: string;
+  section_name?: string;
+  company_name?: string;
   original_name: string;
   stored_path: string;
+  storage_object_path?: string;
   reason: string;
   status: 'PENDING' | 'APPROVED' | 'REJECTED';
   requester_id: string;
+  requester_account?: string;
   requester_name: string;
   reviewer_id?: string;
   reviewer_name?: string;
@@ -75,6 +83,14 @@ export const requestDeleteFile = async (ctx: DeleteContext, reason: string) => {
     '/ai/files-delete-request',
     {
       uid: ctx.uid,
+      module: ctx.module,
+      owner_id: Number(ctx.ownerId || 0),
+      folder: ctx.folder,
+      file_name: ctx.fileName,
+      stored_path: ctx.storedPath || '',
+      object_path: objectPathFromContext(ctx),
+      uploader_id: ctx.uploaderId || '',
+      uploader_name: ctx.uploaderName || '',
       reason,
       company_name: ctx.companyName,
       section_name: ctx.sectionName,
