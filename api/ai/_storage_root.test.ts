@@ -26,6 +26,13 @@ describe('storage root manager', () => {
     expect(getStorageRoot()).toBe('C:\\custom\\work4hk');
   });
 
+  it('falls back to /tmp on non-windows runtime when env is empty', async () => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    expect(getStorageRoot()).toContain(path.join(os.tmpdir(), 'work4hk'));
+    if (original) Object.defineProperty(process, 'platform', original);
+  });
+
   it('auto creates storage directories and checks permission', async () => {
     const root = tempRoot();
     process.env.FILE_STORAGE_ROOT = root;

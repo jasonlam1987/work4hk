@@ -23,7 +23,9 @@ let cachedReady: EnsureStorageResult | null = null;
 
 export const getStorageRoot = () => {
   const fromEnv = String(process.env.FILE_STORAGE_ROOT || '').trim();
-  return fromEnv || DEFAULT_STORAGE_ROOT;
+  if (fromEnv) return fromEnv;
+  if (process.platform === 'win32') return DEFAULT_STORAGE_ROOT;
+  return path.join(os.tmpdir(), 'work4hk');
 };
 
 export const getStoragePaths = (root = getStorageRoot()): StoragePaths => ({
