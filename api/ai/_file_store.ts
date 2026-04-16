@@ -1,15 +1,15 @@
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { ensureStorageReady } from './_storage_root';
+import { ensureStorageReady, getStoragePaths } from './_storage_root';
 
 export const MAX_SIZE = 10 * 1024 * 1024;
 export const ALLOWED = new Set(['application/pdf', 'image/jpeg', 'image/png']);
-const READY = await ensureStorageReady();
-export const ROOT = READY.paths.root;
-export const TMP_DIR = READY.paths.tmpDir;
-export const DATA_DIR = READY.paths.dataDir;
-export const INDEX_FILE = READY.paths.indexFile;
+const STORAGE_PATHS = getStoragePaths();
+export const ROOT = STORAGE_PATHS.root;
+export const TMP_DIR = STORAGE_PATHS.tmpDir;
+export const DATA_DIR = STORAGE_PATHS.dataDir;
+export const INDEX_FILE = STORAGE_PATHS.indexFile;
 export const DELETE_CONFIRM_TEXT = 'DELETE';
 const TOKEN_SECRET = process.env.FILE_TOKEN_SECRET || 'work4hk-file-secret';
 const TOKEN_TTL_SEC = 10 * 60;
