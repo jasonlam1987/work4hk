@@ -40,6 +40,12 @@ export default async function handler(req: any, res: any) {
 
   try {
     if (!isSupabaseStorageEnabled()) {
+      if (process.env.VERCEL) {
+        return respond(res, 500, {
+          code: 'SUPABASE_NOT_CONFIGURED',
+          error: 'supabase storage not configured on vercel',
+        });
+      }
       const local = await import('./_file_store');
       await local.ensureDirs();
       const idx = await local.readIndex();
