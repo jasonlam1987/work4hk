@@ -12,6 +12,7 @@ import FileDeleteActionDialog from '../components/FileDeleteActionDialog';
 import { pushDeleteNotice } from '../utils/deleteNotifications';
 import { pushInAppMessage } from '../utils/inAppMessages';
 import { markDeletePending, releaseDeletePending } from '../utils/deletePendingState';
+import { submitEntityDeleteRequest } from '../utils/entityDeleteRequests';
 
 interface StoredFile {
   id: string;
@@ -39,18 +40,27 @@ const initialForm: EmployerCreate = {
   company_address: '',
   mailing_address: '',
   business_registration_number: '',
+  company_incorporation_number: '',
+  contact_person: '',
+  phone_code: '+852',
+  contact_phone: '',
   business_type: '',
   remarks: ''
 };
 
 const EMPLOYERS_CACHE_KEY = 'cache_employers_list_v1';
+const EMPLOYERS_CACHE_TTL_MS = 5 * 60 * 1000;
+const EMPLOYERS_PERF_KEY = 'employers_perf_metrics_v1';
 
 const Employers: React.FC = () => {
   const [employers, setEmployers] = useState<Employer[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [hasLoaded, setHasLoaded] = useState(false);
+  const [renderCount, setRenderCount] = useState(120);
+  const inFlightRef = useRef<Promise<void> | null>(null);
   
   // Modal states
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -68,6 +78,7 @@ const Employers: React.FC = () => {
   // Custom Delete Modal states
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{id: number, name: string} | null>(null);
+  const [deleteReason, setDeleteReason] = useState('');
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteContext, setDeleteContext] = useState<DeleteContext | null>(null);
   const [deleteStatusByUid, setDeleteStatusByUid] = useState<Record<string, 'PENDING' | 'APPROVED' | 'REJECTED'>>({});
@@ -174,14 +185,26 @@ const Employers: React.FC = () => {
   }, [isFileModalOpen, selectedEmployerForFiles, superAdmin]);
 
   useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search), 300);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  useEffect(() => {
+    setRenderCount(120);
+  }, [debouncedSearch]);
+
+  useEffect(() => {
     const raw = localStorage.getItem(EMPLOYERS_CACHE_KEY);
     if (!raw) return;
     try {
       const parsed = JSON.parse(raw);
       const items = Array.isArray(parsed?.items) ? (parsed.items as Employer[]) : Array.isArray(parsed) ? (parsed as Employer[]) : [];
+      const savedAt = Number(parsed?.savedAt || 0);
+      const isFresh = Date.now() - savedAt <= EMPLOYERS_CACHE_TTL_MS;
       if (items.length > 0) {
         setEmployers(items);
         setHasLoaded(true);
+        if (!isFresh) fetchEmployers();
       }
     } catch {
     }
@@ -490,11 +513,15 @@ const Employers: React.FC = () => {
   };
 
   const fetchEmployers = async () => {
+    if (inFlightRef.current) return inFlightRef.current;
+    const startedAt = performance.now();
+    const run = (async () => {
     try {
       setLoading(true);
-      const data = await getEmployers({ limit: 1000 });
+      const data = await getEmployers({ limit: 500 });
       setEmployers(data);
       localStorage.setItem(EMPLOYERS_CACHE_KEY, JSON.stringify({ items: data, savedAt: Date.now() }));
+      sessionStorage.setItem(EMPLOYERS_PERF_KEY, JSON.stringify({ loadMs: Number((performance.now() - startedAt).toFixed(1)), size: data.length, savedAt: Date.now() }));
       setError('');
       setHasLoaded(true);
     } catch (err: any) {
@@ -502,16 +529,25 @@ const Employers: React.FC = () => {
     } finally {
       setLoading(false);
     }
+    })();
+    inFlightRef.current = run;
+    try {
+      await run;
+    } finally {
+      inFlightRef.current = null;
+    }
   };
 
   const visibleEmployers = React.useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = debouncedSearch.trim().toLowerCase();
     if (!q) return employers;
     return employers.filter(e => {
-      const hay = `${e.code || ''} ${e.name || ''} ${e.english_name || ''} ${e.business_registration_number || ''}`.toLowerCase();
+      const hay = `${e.code || ''} ${e.name || ''} ${e.english_name || ''} ${e.business_registration_number || ''} ${e.company_incorporation_number || ''}`.toLowerCase();
       return hay.includes(q);
     });
-  }, [employers, search]);
+  }, [employers, debouncedSearch]);
+
+  const renderedEmployers = React.useMemo(() => visibleEmployers.slice(0, renderCount), [visibleEmployers, renderCount]);
 
   const handleOpenCreate = () => {
     // 找出目前的 EST 最大序號
@@ -542,6 +578,10 @@ const Employers: React.FC = () => {
       company_address: employer.company_address || '',
       mailing_address: employer.mailing_address || '',
       business_registration_number: employer.business_registration_number || '',
+      company_incorporation_number: employer.company_incorporation_number || '',
+      contact_person: employer.contact_person || '',
+      phone_code: employer.phone_code || '+852',
+      contact_phone: employer.contact_phone || '',
       business_type: employer.business_type || '',
       remarks: employer.remarks || ''
     });
@@ -561,17 +601,35 @@ const Employers: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const phoneCode = String(formData.phone_code || '+852');
+    const phoneNumber = String(formData.contact_phone || '').trim();
+    if (!['+86', '+852', '+853'].includes(phoneCode)) {
+      alert('電話區號只允許 +86、+852、+853');
+      return;
+    }
+    if (phoneNumber && !/^\d{7,11}$/.test(phoneNumber)) {
+      alert('電話號碼格式錯誤：請輸入 7-11 位數字');
+      return;
+    }
     setSaving(true);
     try {
       if (isEditing && selectedId) {
-        const saved = await updateEmployer(selectedId, formData);
+        const saved = await updateEmployer(selectedId, {
+          ...formData,
+          phone_code: phoneCode,
+          contact_phone: phoneNumber || undefined,
+        });
         setEmployers(prev => {
           const next = prev.map(it => (it.id === saved.id ? saved : it));
           persistEmployersCache(next);
           return next;
         });
       } else {
-        const saved = await createEmployer(formData);
+        const saved = await createEmployer({
+          ...formData,
+          phone_code: phoneCode,
+          contact_phone: phoneNumber || undefined,
+        });
         setEmployers(prev => {
           const next = [saved, ...prev];
           persistEmployersCache(next);
@@ -592,6 +650,32 @@ const Employers: React.FC = () => {
     if (!deleteTarget) return;
 
     const targetId = deleteTarget.id;
+    if (!superAdmin) {
+      const reason = String(deleteReason || '').trim();
+      if (!reason) {
+        alert('請填寫刪除理由');
+        return;
+      }
+      setSaving(true);
+      try {
+        const resp = submitEntityDeleteRequest({
+          module: 'employers',
+          entityId: targetId,
+          recordNo: deleteTarget.name,
+          companyName: deleteTarget.name,
+          reason,
+        });
+        alert(String((resp as any)?.message || '已提交刪除申請，等待超級管理員審批'));
+        setDeleteModalOpen(false);
+        setDeleteTarget(null);
+        setDeleteReason('');
+      } catch (err: any) {
+        alert(err?.message || '提交刪除申請失敗');
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
     const prevEmployers = employers;
 
     setEmployers(prev => {
@@ -601,6 +685,7 @@ const Employers: React.FC = () => {
     });
     setDeleteModalOpen(false);
     setDeleteTarget(null);
+    setDeleteReason('');
 
     setSaving(true);
     try {
@@ -618,6 +703,7 @@ const Employers: React.FC = () => {
 
   const triggerDelete = (id: number, name: string) => {
     setDeleteTarget({ id, name });
+    setDeleteReason('');
     setDeleteModalOpen(true);
   };
 
@@ -647,7 +733,7 @@ const Employers: React.FC = () => {
             </div>
             <input
               type="text"
-              placeholder="搜尋僱主名稱、代碼..."
+              placeholder="搜尋僱主名稱、BR、CI..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="block w-full pl-10 pr-3 py-2 border border-gray-200 rounded-apple-sm leading-5 bg-white/80 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all sm:text-sm"
@@ -669,8 +755,10 @@ const Employers: React.FC = () => {
             <thead className="bg-gray-50/50">
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">僱主名稱</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">代碼</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">商業登記號</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">BR號碼</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">CI號碼</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">聯繫人</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">電話</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">地址</th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
               </tr>
@@ -678,14 +766,14 @@ const Employers: React.FC = () => {
             <tbody className="bg-white/30 divide-y divide-gray-200">
               {loading && employers.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center">
+                  <td colSpan={7} className="px-6 py-12 text-center">
                     <Loader2 className="w-8 h-8 animate-spin text-apple-blue mx-auto" />
                     <p className="text-gray-500 mt-2">載入中...</p>
                   </td>
                 </tr>
               ) : visibleEmployers.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-gray-500">
+                  <td colSpan={7} className="px-6 py-12 text-center text-gray-500">
                     {error
                       ? '後端僱主服務暫時不可用，請稍後再刷新'
                       : hasLoaded
@@ -694,7 +782,7 @@ const Employers: React.FC = () => {
                   </td>
                 </tr>
               ) : (
-                visibleEmployers.map((employer) => (
+                renderedEmployers.map((employer) => (
                   <tr key={employer.id} className="hover:bg-gray-50/50 transition-colors">
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center">
@@ -708,10 +796,16 @@ const Employers: React.FC = () => {
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {employer.code || '-'}
+                      {employer.business_registration_number || '-'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {employer.business_registration_number || '-'}
+                      {employer.company_incorporation_number || '-'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {employer.contact_person || '-'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {employer.contact_phone ? `${employer.phone_code || '+852'} ${employer.contact_phone}` : '-'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 truncate max-w-[200px]" title={employer.company_address}>
                       {employer.company_address || '-'}
@@ -750,6 +844,17 @@ const Employers: React.FC = () => {
             </tbody>
           </table>
         </div>
+      {!loading && visibleEmployers.length > renderCount && (
+        <div className="px-4 py-3 border-t border-gray-100 bg-white/70 text-center">
+          <button
+            type="button"
+            className="px-3 py-1.5 text-sm rounded border border-gray-200 hover:bg-gray-50"
+            onClick={() => setRenderCount((n) => n + 120)}
+          >
+            載入更多（{visibleEmployers.length - renderCount}）
+          </button>
+        </div>
+      )}
       </div>
 
       {/* Employer Modal */}
@@ -806,16 +911,6 @@ const Employers: React.FC = () => {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">僱主代碼 (系統編號)</label>
-              <input
-                type="text"
-                value={formData.code}
-                disabled
-                className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-apple-sm text-gray-500 cursor-not-allowed transition-all"
-                title="系統自動產生的編號，不可修改"
-              />
-            </div>
-            <div>
               <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">商業登記號碼 (BR)</label>
               <input
                 type="text"
@@ -823,6 +918,45 @@ const Employers: React.FC = () => {
                 onChange={(e) => setFormData({...formData, business_registration_number: e.target.value})}
                 className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
               />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">公司註冊證編號 (CI)</label>
+              <input
+                type="text"
+                value={formData.company_incorporation_number || ''}
+                onChange={(e) => setFormData({...formData, company_incorporation_number: e.target.value})}
+                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">聯繫人</label>
+              <input
+                type="text"
+                value={formData.contact_person || ''}
+                onChange={(e) => setFormData({...formData, contact_person: e.target.value})}
+                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">電話</label>
+              <div className="flex gap-2">
+                <select
+                  value={formData.phone_code || '+852'}
+                  onChange={(e) => setFormData({...formData, phone_code: e.target.value as any})}
+                  className="w-28 px-3 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                >
+                  <option value="+852">+852</option>
+                  <option value="+86">+86</option>
+                  <option value="+853">+853</option>
+                </select>
+                <input
+                  type="text"
+                  value={formData.contact_phone || ''}
+                  onChange={(e) => setFormData({...formData, contact_phone: e.target.value})}
+                  className="flex-1 px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                  placeholder="7-11位數字"
+                />
+              </div>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">簡稱</label>
@@ -1072,13 +1206,28 @@ const Employers: React.FC = () => {
           <div className="bg-gray-900 rounded-apple w-full max-w-md p-6 shadow-xl border border-gray-800">
             <h3 className="text-white font-semibold text-sm mb-4">http://localhost:5176 顯示</h3>
             <p className="text-gray-200 text-base mb-8 leading-relaxed">
-              確定要刪除僱主「{deleteTarget.name}」嗎？這將會同步刪除該僱主相關的職位與勞工數據，且無法復原。
+              {superAdmin
+                ? `確定要刪除僱主「${deleteTarget.name}」嗎？這將會同步刪除該僱主相關的職位與勞工數據，且無法復原。`
+                : `確定要申請刪除僱主「${deleteTarget.name}」嗎？需經超級管理員審批後才會正式刪除。`}
             </p>
+            {!superAdmin && (
+              <div className="mb-4">
+                <label className="block text-sm text-gray-300 mb-1">刪除理由 *</label>
+                <textarea
+                  value={deleteReason}
+                  onChange={(e) => setDeleteReason(e.target.value)}
+                  rows={3}
+                  className="w-full px-3 py-2 rounded border border-gray-600 bg-gray-800 text-white focus:outline-none focus:ring-2 focus:ring-apple-blue/50"
+                  placeholder="請輸入申請刪除原因"
+                />
+              </div>
+            )}
             <div className="flex justify-end space-x-3">
               <button 
                 onClick={() => {
                   setDeleteModalOpen(false);
                   setDeleteTarget(null);
+                  setDeleteReason('');
                 }}
                 disabled={saving}
                 className="px-5 py-2 rounded-apple-sm text-sm font-medium bg-gray-700 text-white hover:bg-gray-600 transition-colors"
@@ -1091,7 +1240,7 @@ const Employers: React.FC = () => {
                 className="px-5 py-2 rounded-apple-sm text-sm font-medium bg-apple-blue text-white hover:bg-blue-600 transition-colors flex items-center"
               >
                 {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                確認
+                {superAdmin ? '確認' : '提交刪除申請'}
               </button>
             </div>
           </div>

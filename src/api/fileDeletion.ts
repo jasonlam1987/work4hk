@@ -45,6 +45,7 @@ let cachedCsrf = '';
 
 const headersWithIdentity = async () => {
   const { roleKey, userId, userName } = getAuthIdentity();
+  const safeUserName = encodeURIComponent(String(userName || 'unknown'));
   if (!cachedCsrf) {
     const resp = await apiClient.get('/ai/csrf');
     cachedCsrf = String(resp?.data?.csrf_token || '');
@@ -52,7 +53,7 @@ const headersWithIdentity = async () => {
   return {
     'x-user-role': roleKey || 'admin',
     'x-user-id': userId || 'unknown',
-    'x-user-name': userName || 'unknown',
+    'x-user-name': safeUserName,
     'x-csrf-token': cachedCsrf,
   };
 };
@@ -119,6 +120,13 @@ export const listDeleteRequests = async () => {
     headers: await headersWithIdentity(),
   });
   return Array.isArray(res?.data?.items) ? res.data.items : [];
+};
+
+export const pruneCompletedDeleteRequests = async () => {
+  const res = await apiClient.post('/ai/files-delete-requests-prune', {}, {
+    headers: await headersWithIdentity(),
+  });
+  return res.data;
 };
 
 export const reviewDeleteRequest = async (

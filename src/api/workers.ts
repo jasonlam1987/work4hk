@@ -1,4 +1,5 @@
 import apiClient from './client';
+import { appendGlobalAuditLog } from '../utils/auditLog';
 
 export interface Worker {
   id: number;
@@ -37,15 +38,35 @@ export const getWorkers = async (params?: { q?: string; limit?: number; offset?:
 
 export const createWorker = async (data: WorkerCreate) => {
   const response = await apiClient.post<Worker>('/labours', data);
+  appendGlobalAuditLog({
+    module: 'workers',
+    action: 'create',
+    record_id: String(response.data?.id || ''),
+    record_no: String(response.data?.labour_name || response.data?.id_card_number || ''),
+    details: `創建勞工：${response.data?.labour_name || response.data?.id || '-'}`,
+  });
   return response.data;
 };
 
 export const updateWorker = async (id: number, data: Partial<WorkerCreate>) => {
   const response = await apiClient.patch<Worker>(`/labours/${id}`, data);
+  appendGlobalAuditLog({
+    module: 'workers',
+    action: 'update',
+    record_id: String(id),
+    record_no: String(response.data?.labour_name || response.data?.id_card_number || ''),
+    details: `更新勞工：${response.data?.labour_name || id}`,
+  });
   return response.data;
 };
 
 export const deleteWorker = async (id: number) => {
   const response = await apiClient.delete(`/labours/${id}`);
+  appendGlobalAuditLog({
+    module: 'workers',
+    action: 'delete',
+    record_id: String(id),
+    details: `刪除勞工 id=${id}`,
+  });
   return response.data;
 };

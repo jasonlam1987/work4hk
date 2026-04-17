@@ -1,4 +1,5 @@
 import apiClient from './client';
+import { appendGlobalAuditLog } from '../utils/auditLog';
 
 export interface Approval {
   id: number;
@@ -104,6 +105,29 @@ export const getApprovalQuotaDetails = (approvalId: number): QuotaDetail[] => {
       work_locations: locations,
     } as QuotaDetail;
   });
+};
+
+export const getApprovalQuotaMap = (): Record<string, QuotaDetail[]> => {
+  const map = readQuotaMap();
+  const out: Record<string, QuotaDetail[]> = {};
+  for (const [approvalId, list] of Object.entries(map)) {
+    const safeList = Array.isArray(list) ? list : [];
+    out[approvalId] = safeList.map((q: any) => {
+      const locations = Array.isArray(q?.work_locations)
+        ? q.work_locations.map((x: any) => String(x || '').trim()).filter(Boolean).slice(0, 3)
+        : String(q?.work_location || '')
+            .split('|')
+            .map((x: any) => String(x || '').trim())
+            .filter(Boolean)
+            .slice(0, 3);
+      return {
+        ...q,
+        work_location: locations[0] || String(q?.work_location || '').trim(),
+        work_locations: locations,
+      } as QuotaDetail;
+    });
+  }
+  return out;
 };
 
 export const setApprovalQuotaDetails = (approvalId: number, details: QuotaDetail[]) => {
@@ -308,6 +332,13 @@ export const createApproval = async (data: ApprovalCreate) => {
 
   try {
     const response = await apiClient.post<Approval>('/approvals', normalizedPayload);
+    appendGlobalAuditLog({
+      module: 'approvals',
+      action: 'create',
+      record_id: String(response.data?.id || ''),
+      record_no: String(response.data?.approval_number || normalizedPayload.approval_number || ''),
+      details: `創建批文：${response.data?.approval_number || '-'}`,
+    });
     return response.data;
   } catch (err: any) {
     const status = err?.response?.status as number | undefined;
@@ -329,6 +360,13 @@ export const createApproval = async (data: ApprovalCreate) => {
     for (const p of retryPayloads) {
       try {
         const response = await apiClient.post<Approval>('/approvals', p);
+        appendGlobalAuditLog({
+          module: 'approvals',
+          action: 'create',
+          record_id: String(response.data?.id || ''),
+          record_no: String(response.data?.approval_number || p.approval_number || ''),
+          details: `創建批文（重試成功）：${response.data?.approval_number || '-'}`,
+        });
         return response.data;
       } catch (e: any) {
         const s = e?.response?.status as number | undefined;
@@ -354,6 +392,13 @@ export const updateApproval = async (id: number, data: Partial<ApprovalCreate>) 
   }
   try {
     const response = await apiClient.patch<Approval>(`/approvals/${id}`, nextData);
+    appendGlobalAuditLog({
+      module: 'approvals',
+      action: 'update',
+      record_id: String(id),
+      record_no: String(response.data?.approval_number || ''),
+      details: `更新批文：${response.data?.approval_number || id}`,
+    });
     return response.data;
   } catch (err: any) {
     const status = err?.response?.status as number | undefined;
@@ -378,6 +423,13 @@ export const updateApproval = async (id: number, data: Partial<ApprovalCreate>) 
       const next = idx >= 0 ? [...list] : [updated, ...list];
       if (idx >= 0) next[idx] = updated;
       writeMockApprovals(next);
+      appendGlobalAuditLog({
+        module: 'approvals',
+        action: 'update',
+        record_id: String(id),
+        record_no: String(updated?.approval_number || ''),
+        details: `更新批文（本機mock）：${updated?.approval_number || id}`,
+      });
       return updated;
     }
 
@@ -390,6 +442,13 @@ export const updateApproval = async (id: number, data: Partial<ApprovalCreate>) 
     const next = [...list];
     next[idx] = updated;
     writeMockApprovals(next);
+    appendGlobalAuditLog({
+      module: 'approvals',
+      action: 'update',
+      record_id: String(id),
+      record_no: String(updated?.approval_number || ''),
+      details: `更新批文（回退）：${updated?.approval_number || id}`,
+    });
     return updated;
   }
 };
@@ -397,6 +456,12 @@ export const updateApproval = async (id: number, data: Partial<ApprovalCreate>) 
 export const deleteApproval = async (id: number) => {
   try {
     const response = await apiClient.delete(`/approvals/${id}`);
+    appendGlobalAuditLog({
+      module: 'approvals',
+      action: 'delete',
+      record_id: String(id),
+      details: `刪除批文 id=${id}`,
+    });
     return response.data;
   } catch (err: any) {
     const status = err?.response?.status as number | undefined;
@@ -408,6 +473,12 @@ export const deleteApproval = async (id: number) => {
       const list = readMockApprovals();
       const next = list.filter(a => a.id !== id);
       writeMockApprovals(next);
+      appendGlobalAuditLog({
+        module: 'approvals',
+        action: 'delete',
+        record_id: String(id),
+        details: `刪除批文（已不存在，視作成功） id=${id}`,
+      });
       return { ok: true, alreadyDeleted: true };
     }
 
@@ -419,6 +490,12 @@ export const deleteApproval = async (id: number) => {
     const quotaMap = readQuotaMap();
     delete quotaMap[String(id)];
     writeQuotaMap(quotaMap);
+    appendGlobalAuditLog({
+      module: 'approvals',
+      action: 'delete',
+      record_id: String(id),
+      details: `刪除批文（回退） id=${id}`,
+    });
     return { ok: true };
   }
 };

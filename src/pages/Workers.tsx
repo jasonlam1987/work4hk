@@ -2,13 +2,13 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Search, Edit2, Loader2, RefreshCw, Briefcase, GraduationCap, Link2, Home, Mail, Trash2, FolderOpen, UploadCloud, Download } from 'lucide-react';
 import clsx from 'clsx';
 import Modal from '../components/Modal';
-import { Worker, WorkerCreate, createWorker, deleteWorker, getWorkers, updateWorker } from '../api/workers';
-import { Employer, getEmployers } from '../api/employers';
-import { Approval, getApprovals, getApprovalQuotaDetails, QuotaDetail } from '../api/approvals';
+import { Worker, WorkerCreate, createWorker, deleteWorker, updateWorker } from '../api/workers';
+import { Employer } from '../api/employers';
+import { Approval, getApprovalQuotaDetails, QuotaDetail } from '../api/approvals';
 import { WorkerEducation, WorkerProfile, WorkerWorkExperience, getWorkerProfile, setWorkerProfile } from '../utils/workerProfile';
 import { WorkerFileCategory, WorkerFileMeta, uploadWorkerFile } from '../api/workerFiles';
 import { downloadManagedFile, MAX_UPLOAD_SIZE } from '../api/files';
-import { PHONE_CODES, labourStatusOptions, labourStatusToApi, labourStatusToUi, normalizeDate, isMainlandId, isPhoneNumber, mergePhone, formatEmploymentMonths, parseEmploymentMonths } from '../utils/workersForm';
+import { PHONE_CODES, labourStatusOptions, labourStatusToApi, labourStatusToUi, normalizeDate, isPhoneNumber, formatEmploymentMonths, parseEmploymentMonths } from '../utils/workersForm';
 import { normalizeErrorMessage } from '../utils/errorMessage';
 import { useUploadStore } from '../store/uploadStore';
 import { DeleteContext, listDeleteRequests, permanentDeleteFile, requestDeleteFile } from '../api/fileDeletion';
@@ -17,10 +17,10 @@ import FileDeleteActionDialog from '../components/FileDeleteActionDialog';
 import { pushDeleteNotice } from '../utils/deleteNotifications';
 import { pushInAppMessage } from '../utils/inAppMessages';
 import { markDeletePending, releaseDeletePending } from '../utils/deletePendingState';
+import { useWorkersPageData } from '../features/workers/hooks/useWorkersPageData';
+import { buildWorkerSubmitPayload, validateWorkerSubmitInput } from '../features/workers/form/workerSubmitService';
+import { submitEntityDeleteRequest } from '../utils/entityDeleteRequests';
 
-const WORKERS_CACHE_KEY = 'cache_workers_list_v1';
-const EMPLOYERS_CACHE_KEY = 'cache_employers_list_v1';
-const APPROVALS_CACHE_KEY = 'cache_approvals_list_v1';
 const MAX_FILES_PER_CATEGORY = 10;
 const MAX_FILE_SIZE = MAX_UPLOAD_SIZE;
 const ACCEPT_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png']);
@@ -61,23 +61,19 @@ const initialForm: WorkerCreate = {
   approval_id: undefined,
 };
 
-const addMonths = (dateStr: string, months: number) => {
-  const d = new Date(dateStr);
-  if (Number.isNaN(d.getTime())) return '';
-  const next = new Date(d);
-  next.setMonth(next.getMonth() + months);
-  return next.toISOString().slice(0, 10);
-};
-
 const Workers: React.FC = () => {
-  const [workers, setWorkers] = useState<Worker[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
   const [search, setSearch] = useState('');
-  const [hasLoaded, setHasLoaded] = useState(false);
-
-  const [employers, setEmployers] = useState<Employer[]>([]);
-  const [approvals, setApprovals] = useState<Approval[]>([]);
+  const [renderCount, setRenderCount] = useState(120);
+  const {
+    workers,
+    setWorkers,
+    loading,
+    error,
+    hasLoaded,
+    employers,
+    approvals,
+    fetchWorkers,
+  } = useWorkersPageData(search);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -102,6 +98,7 @@ const Workers: React.FC = () => {
   const [dragOver, setDragOver] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Worker | null>(null);
+  const [deleteReason, setDeleteReason] = useState('');
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteContext, setDeleteContext] = useState<DeleteContext | null>(null);
   const [deleteStatusByUid, setDeleteStatusByUid] = useState<Record<string, 'PENDING' | 'APPROVED' | 'REJECTED'>>({});
@@ -125,6 +122,10 @@ const Workers: React.FC = () => {
   const clearScope = useUploadStore(s => s.clearScope);
   const uploadTasks = useMemo(() => Object.values(tasksByScope[uploadScope] || {}), [tasksByScope, uploadScope]);
 
+  useEffect(() => {
+    setRenderCount(120);
+  }, [search]);
+
   const employerId = Number((formData as any).employer_id || 0) || undefined;
   const approvalId = Number((formData as any).approval_id || profile.approval_id || 0) || undefined;
   const selectedQuotaSeq = String(profile.quota_seq || '').trim();
@@ -132,96 +133,6 @@ const Workers: React.FC = () => {
     if (!approvalId) return [];
     return getApprovalQuotaDetails(approvalId);
   }, [approvalId, approvals]);
-
-  const fetchWorkers = async () => {
-    try {
-      setLoading(true);
-      const data = await getWorkers({ q: search });
-      setWorkers(data);
-      setError('');
-      setHasLoaded(true);
-      try {
-        localStorage.setItem(WORKERS_CACHE_KEY, JSON.stringify({ items: data, savedAt: Date.now() }));
-      } catch {
-      }
-    } catch (err: any) {
-      const msg = err.response?.data?.detail || '獲取勞工列表失敗';
-      setError(msg);
-      if (!hasLoaded) {
-        try {
-          const raw = localStorage.getItem(WORKERS_CACHE_KEY);
-          const parsed = raw ? JSON.parse(raw) : null;
-          const items = Array.isArray(parsed?.items) ? (parsed.items as Worker[]) : [];
-          if (items.length > 0) {
-            setWorkers(items);
-            setHasLoaded(true);
-          }
-        } catch {
-        }
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchEmployers = async () => {
-    try {
-      const list = await getEmployers({ limit: 1000 });
-      setEmployers(list);
-      return list;
-    } catch {
-      try {
-        const raw = localStorage.getItem(EMPLOYERS_CACHE_KEY);
-        const parsed = raw ? JSON.parse(raw) : null;
-        const items = Array.isArray(parsed?.items) ? (parsed.items as Employer[]) : [];
-        if (items.length > 0) {
-          setEmployers(items);
-          return items;
-        }
-      } catch {
-      }
-      setEmployers([]);
-      return [] as Employer[];
-    }
-  };
-
-  const fetchApprovals = async () => {
-    try {
-      const list = await getApprovals({ limit: 1000 });
-      setApprovals(list);
-      return list;
-    } catch {
-      try {
-        const raw = localStorage.getItem(APPROVALS_CACHE_KEY);
-        const parsed = raw ? JSON.parse(raw) : null;
-        const items = Array.isArray(parsed?.items) ? (parsed.items as Approval[]) : [];
-        if (items.length > 0) {
-          setApprovals(items);
-          return items;
-        }
-      } catch {
-      }
-      setApprovals([]);
-      return [] as Approval[];
-    }
-  };
-
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(WORKERS_CACHE_KEY);
-      const parsed = raw ? JSON.parse(raw) : null;
-      const items = Array.isArray(parsed?.items) ? (parsed.items as Worker[]) : [];
-      if (items.length > 0) {
-        setWorkers(items);
-        setHasLoaded(true);
-      }
-    } catch {
-    }
-
-    fetchWorkers();
-    fetchEmployers();
-    fetchApprovals();
-  }, []);
 
   useEffect(() => {
     try {
@@ -617,11 +528,38 @@ const Workers: React.FC = () => {
 
   const handleOpenDelete = (worker: Worker) => {
     setDeleteTarget(worker);
+    setDeleteReason('');
     setDeleteModalOpen(true);
   };
 
   const confirmDelete = async () => {
     if (!deleteTarget) return;
+    if (!superAdmin) {
+      const reason = String(deleteReason || '').trim();
+      if (!reason) {
+        alert('請填寫刪除理由');
+        return;
+      }
+      setSaving(true);
+      try {
+        const resp = submitEntityDeleteRequest({
+          module: 'workers',
+          entityId: deleteTarget.id,
+          recordNo: deleteTarget.labour_name || '',
+          companyName: deleteTarget.employer_name || '',
+          reason,
+        });
+        alert(String((resp as any)?.message || '已提交刪除申請，等待超級管理員審批'));
+        setDeleteModalOpen(false);
+        setDeleteTarget(null);
+        setDeleteReason('');
+      } catch (err: any) {
+        alert(formatApiError(err));
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
     setSaving(true);
     const targetId = deleteTarget.id;
     const prev = workers;
@@ -630,7 +568,8 @@ const Workers: React.FC = () => {
       await deleteWorker(targetId);
       setDeleteModalOpen(false);
       setDeleteTarget(null);
-      fetchWorkers();
+      setDeleteReason('');
+      fetchWorkers('', false, true);
     } catch {
       setWorkers(prev);
       alert('刪除失敗，已復原列表');
@@ -676,146 +615,31 @@ const Workers: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    const labourName = String(formData.labour_name || '').trim();
-    const idCard = String(formData.id_card_number || '').trim();
-    if (!labourName) {
-      alert('請輸入中文名字');
+    const validationMessage = validateWorkerSubmitInput({
+      formData,
+      profile,
+      isEditing,
+      employerId,
+      approvalId,
+      selectedQuotaSeq,
+      quotaOptionsLength: quotaOptions.length,
+    });
+    if (validationMessage) {
+      alert(validationMessage);
       return;
-    }
-    if (!idCard) {
-      alert('請輸入內地身份證號碼');
-      return;
-    }
-    if (!isMainlandId(idCard)) {
-      alert('內地身份證號碼格式不正確（需 18 位，最後一位可為 X）');
-      return;
-    }
-    if (!employerId) {
-      alert('請選擇僱主');
-      return;
-    }
-    if (!approvalId && !String(profile.approval_number || '').trim()) {
-      alert('請選擇批文');
-      return;
-    }
-    if (approvalId && quotaOptions.length > 0 && !selectedQuotaSeq) {
-      alert('請選擇配額編號');
-      return;
-    }
-    const uiStatus = String(formData.labour_status || '辦證中');
-    if (!isEditing && uiStatus !== '辦證中') {
-      alert('首次錄入資料，勞工狀態只能為「辦證中」');
-      return;
-    }
-    if (uiStatus === '在職' && !String(profile.arrival_date || '').trim()) {
-      alert('狀態為「在職」時，必須輸入赴港日期');
-      return;
-    }
-    if (uiStatus === '離職' && !String(profile.departure_date || '').trim()) {
-      alert('狀態為「離職」時，必須輸入離港日期');
-      return;
-    }
-    const phoneCode = String(profile.phone_code || '+852') as '+86' | '+852' | '+853';
-    const phoneNumber = String(profile.phone_number || '').trim();
-    if (phoneNumber && !isPhoneNumber(phoneNumber)) {
-      alert('電話號碼格式錯誤：請輸入 7-11 位數字');
-      return;
-    }
-    if (profile.entry_refused) {
-      const d = String(profile.entry_refused_date || '').trim();
-      const r = String(profile.entry_refused_reason || '').trim();
-      if (!d || !r) {
-        alert('請補充入境被拒的日期及原因');
-        return;
-      }
     }
 
     setSaving(true);
     try {
-      const persistedProfile: WorkerProfile = {
-        ...profile,
-        quota_seq: selectedQuotaSeq || undefined,
-        work_locations: Array.isArray(profile.work_locations) ? profile.work_locations.slice(0, 3) : [],
-        contact_phone: mergePhone(phoneCode, phoneNumber) || undefined,
-        phone_code: phoneCode,
-        phone_number: phoneNumber || undefined,
-        arrival_date: profile.arrival_date ? normalizeDate(profile.arrival_date) : undefined,
-        departure_date: profile.departure_date ? normalizeDate(profile.departure_date) : undefined,
-      };
-      const months = Number(parseEmploymentMonths(formData.employment_term));
-      const startDate = persistedProfile.arrival_date || '';
-      const expiresAt = uiStatus === '在職' && startDate && months > 0 ? addMonths(startDate, months) : '';
-      const employerName = employers.find(e => e.id === employerId)?.name || employerQuery || '';
-      const currentBatchId =
-        `${String(employerId || '')}|${String(approvalId || persistedProfile.approval_id || '')}|${startDate}|${uiStatus}`;
-      const prevBatches = Array.isArray(persistedProfile.work_batches) ? persistedProfile.work_batches : [];
-      const nextBatch =
-        uiStatus === '在職' || uiStatus === '離職'
-          ? {
-              id: currentBatchId,
-              employer_id: employerId,
-              employer_name: employerName,
-              approval_id: approvalId || persistedProfile.approval_id,
-              approval_number: String(profile.approval_number || '').trim() || persistedProfile.approval_number,
-              quota_seq: selectedQuotaSeq || persistedProfile.quota_seq,
-              status: uiStatus as any,
-              start_date: startDate || undefined,
-              departure_date: uiStatus === '離職' ? persistedProfile.departure_date : undefined,
-              employment_term_months: months > 0 ? months : undefined,
-              expires_at: expiresAt || undefined,
-            }
-          : null;
-      const dedupedBatches = nextBatch
-        ? [nextBatch, ...prevBatches.filter(b => b?.id !== nextBatch.id)]
-        : prevBatches;
-      persistedProfile.work_batches = dedupedBatches;
-      const fullPayload: WorkerCreate = {
-        ...formData,
-        labour_name: labourName,
-        id_card_number: idCard,
-        labour_status: labourStatusToApi(uiStatus),
-        employer_id: employerId,
-        approval_id: approvalId,
-        approval_number: String(profile.approval_number || '').trim() || undefined,
-        quota_seq: selectedQuotaSeq || undefined,
-        pinyin_name: String(profile.pinyin_name || '').trim() || undefined,
-        contact_phone: mergePhone(phoneCode, phoneNumber) || undefined,
-        residential_address: String(profile.residential_address || '').trim() || undefined,
-        mailing_address: String(profile.mailing_address || '').trim() || undefined,
-        work_locations: Array.isArray(persistedProfile.work_locations) ? persistedProfile.work_locations : undefined,
-        marital_status: profile.marital_status,
-        contract_salary: String(formData.contract_salary || '').trim() || undefined,
-        employment_term: formatEmploymentMonths(formData.employment_term) || undefined,
-        arrival_date: persistedProfile.arrival_date,
-        departure_date: persistedProfile.departure_date,
-        employment_expires_at: expiresAt || undefined,
-        entry_refused: Boolean(profile.entry_refused),
-        entry_refused_date: profile.entry_refused_date ? normalizeDate(profile.entry_refused_date) : undefined,
-        entry_refused_reason: String(profile.entry_refused_reason || '').trim() || undefined,
-        file_uids: {
-          id_docs: (profile.files?.id_docs || []).map(x => x.uid),
-          education_docs: (profile.files?.education_docs || []).map(x => x.uid),
-          work_docs: (profile.files?.work_docs || []).map(x => x.uid),
-        },
-        work_experiences: Array.isArray(profile.work_experiences)
-          ? profile.work_experiences
-              .map(x => ({
-                company_name: String(x.company_name || '').trim(),
-                start_date: normalizeDate(String(x.start_date || '').trim()),
-                end_date: normalizeDate(String(x.end_date || '').trim()),
-              }))
-              .filter(x => x.company_name || x.start_date || x.end_date)
-          : undefined,
-        educations: Array.isArray(profile.educations)
-          ? profile.educations
-              .map(x => ({
-                school_name: String(x.school_name || '').trim(),
-                start_date: normalizeDate(String(x.start_date || '').trim()),
-                graduation_date: normalizeDate(String(x.graduation_date || '').trim()),
-              }))
-              .filter(x => x.school_name || x.start_date || x.graduation_date)
-          : undefined,
-      };
+      const { labourName, idCard, persistedProfile, fullPayload } = buildWorkerSubmitPayload({
+        formData,
+        profile,
+        employerId,
+        approvalId,
+        selectedQuotaSeq,
+        employerQuery,
+        employers,
+      });
 
       if (isEditing && selectedId) {
         try {
@@ -849,7 +673,7 @@ const Workers: React.FC = () => {
       }
 
       setIsModalOpen(false);
-      fetchWorkers();
+      fetchWorkers('', false, true);
     } catch (err: any) {
       alert(formatApiError(err));
     } finally {
@@ -887,7 +711,7 @@ const Workers: React.FC = () => {
               className="block w-full pl-10 pr-3 py-2 border border-gray-200 rounded-apple-sm leading-5 bg-white/80 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all sm:text-sm"
             />
           </div>
-          <button onClick={fetchWorkers} className="p-2 text-gray-500 hover:text-apple-blue hover:bg-blue-50 rounded-full transition-colors ml-2">
+          <button onClick={() => fetchWorkers(search, false, true)} className="p-2 text-gray-500 hover:text-apple-blue hover:bg-blue-50 rounded-full transition-colors ml-2">
             <RefreshCw className={clsx("w-5 h-5", loading && "animate-spin")} />
           </button>
         </div>
@@ -925,7 +749,7 @@ const Workers: React.FC = () => {
                   </td>
                 </tr>
               ) : (
-                workers.map((worker) => {
+                workers.slice(0, renderCount).map((worker) => {
                   const cachedProfile = getWorkerProfile(worker.id);
                   const approvalNumber = (worker as any).approval_number || cachedProfile.approval_number || '-';
                   const employerName = worker.employer_name || employers.find(e => e.id === Number(worker.employer_id))?.name || '-';
@@ -990,6 +814,17 @@ const Workers: React.FC = () => {
             </tbody>
           </table>
         </div>
+        {!loading && workers.length > renderCount && (
+          <div className="px-4 py-3 border-t border-gray-100 bg-white/70 text-center">
+            <button
+              type="button"
+              className="px-3 py-1.5 text-sm rounded border border-gray-200 hover:bg-gray-50"
+              onClick={() => setRenderCount((n) => n + 120)}
+            >
+              載入更多（{workers.length - renderCount}）
+            </button>
+          </div>
+        )}
       </div>
 
       <Modal
@@ -1820,13 +1655,28 @@ const Workers: React.FC = () => {
           <div className="bg-gray-900 rounded-apple w-full max-w-md p-6 shadow-xl border border-gray-800">
             <h3 className="text-white font-semibold text-sm mb-4">系統提示</h3>
             <p className="text-gray-200 text-base mb-8 leading-relaxed">
-              確定要刪除勞工「{deleteTarget.labour_name || '未命名'}」嗎？刪除後不可復原。
+              {superAdmin
+                ? `確定要刪除勞工「${deleteTarget.labour_name || '未命名'}」嗎？刪除後不可復原。`
+                : `確定要申請刪除勞工「${deleteTarget.labour_name || '未命名'}」嗎？需經超級管理員審批後才會正式刪除。`}
             </p>
+            {!superAdmin && (
+              <div className="mb-4">
+                <label className="block text-sm text-gray-300 mb-1">刪除理由 *</label>
+                <textarea
+                  value={deleteReason}
+                  onChange={(e) => setDeleteReason(e.target.value)}
+                  rows={3}
+                  className="w-full px-3 py-2 rounded border border-gray-600 bg-gray-800 text-white focus:outline-none focus:ring-2 focus:ring-apple-blue/50"
+                  placeholder="請輸入申請刪除原因"
+                />
+              </div>
+            )}
             <div className="flex justify-end space-x-3">
               <button
                 onClick={() => {
                   setDeleteModalOpen(false);
                   setDeleteTarget(null);
+                  setDeleteReason('');
                 }}
                 disabled={saving}
                 className="px-5 py-2 rounded-apple-sm text-sm font-medium bg-gray-700 text-white hover:bg-gray-600 transition-colors"
@@ -1839,7 +1689,7 @@ const Workers: React.FC = () => {
                 className="px-5 py-2 rounded-apple-sm text-sm font-medium bg-apple-blue text-white hover:bg-blue-600 transition-colors flex items-center"
               >
                 {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                確認
+                {superAdmin ? '確認' : '提交刪除申請'}
               </button>
             </div>
           </div>

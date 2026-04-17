@@ -151,7 +151,15 @@ export const verifyRole = (req: any) => {
 
 export const parseRole = (req: any) => String(req?.headers?.['x-user-role'] || '').trim().toLowerCase();
 export const parseUserId = (req: any) => String(req?.headers?.['x-user-id'] || '').trim() || 'unknown';
-export const parseUserName = (req: any) => String(req?.headers?.['x-user-name'] || '').trim() || 'unknown';
+export const parseUserName = (req: any) => {
+  const raw = String(req?.headers?.['x-user-name'] || '').trim();
+  if (!raw) return 'unknown';
+  try {
+    return decodeURIComponent(raw) || 'unknown';
+  } catch {
+    return raw || 'unknown';
+  }
+};
 export const parseIp = (req: any) =>
   String(req?.headers?.['x-forwarded-for'] || req?.socket?.remoteAddress || '')
     .split(',')[0]

@@ -7,6 +7,7 @@ import {
   Building2, 
   Briefcase, 
   FileText, 
+  ClipboardList,
   LogOut,
   Settings,
   ShieldCheck,
@@ -15,8 +16,37 @@ import {
   Bell
 } from 'lucide-react';
 import clsx from 'clsx';
-import { getAuthIdentity } from '../utils/authRole';
+import { canAccessPath, getAuthIdentity, getRoleLabel } from '../utils/authRole';
 import { getInAppMessages, getUnreadInAppCount, markAllInAppRead, markInAppMessageRead, subscribeInAppMessages } from '../utils/inAppMessages';
+import { userDisplayPipe } from '../utils/userDisplayPipe';
+import { listDeleteRequests } from '../api/fileDeletion';
+import { listQuotaDeleteRequests } from '../utils/quotaDeleteRequests';
+import { listEntityDeleteRequests } from '../utils/entityDeleteRequests';
+import { subscribeDeleteNotice } from '../utils/deleteNotifications';
+
+type PendingPreviewItem = {
+  id: string;
+  type: string;
+  company: string;
+  reason: string;
+  createdAt: string;
+};
+
+const PENDING_NOTICE_READ_KEY = 'work4hk_pending_notice_reads_v1';
+
+const readPendingNoticeReads = (): Record<string, number> => {
+  try {
+    const raw = localStorage.getItem(PENDING_NOTICE_READ_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const writePendingNoticeReads = (map: Record<string, number>) => {
+  localStorage.setItem(PENDING_NOTICE_READ_KEY, JSON.stringify(map));
+};
 
 const Layout: React.FC = () => {
   const { user, logout } = useAuthStore();
@@ -24,20 +54,97 @@ const Layout: React.FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [noticeOpen, setNoticeOpen] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
+  const [pendingPreviewItems, setPendingPreviewItems] = useState<PendingPreviewItem[]>([]);
+  const [pendingReadMap, setPendingReadMap] = useState<Record<string, number>>(() => readPendingNoticeReads());
   const [messages, setMessages] = useState<ReturnType<typeof getInAppMessages>>([]);
   const identity = useMemo(() => getAuthIdentity(), [user?.id, user?.role_key, user?.username, user?.full_name]);
 
-  const refreshMessages = () => {
+  const refreshIndicators = async () => {
     const list = getInAppMessages(identity.userId, identity.roleKey);
     setMessages(list);
     setUnreadCount(getUnreadInAppCount(identity.userId, identity.roleKey));
+    if (identity.roleKey !== 'super_admin') {
+      setPendingApprovalCount(0);
+      setPendingPreviewItems([]);
+      return;
+    }
+    try {
+      const fileRows = await listDeleteRequests().catch(() => []);
+      const quotaRows = listQuotaDeleteRequests();
+      const entityRows = listEntityDeleteRequests();
+      const filePending = fileRows
+        .filter((x) => x.status === 'PENDING')
+        .map((x) => ({
+          id: x.request_id,
+          type: '刪除附件',
+          company: String(x.company_name || '-'),
+          reason: String(x.reason || ''),
+          createdAt: String(x.created_at || ''),
+        }));
+      const quotaPending = quotaRows
+        .filter((x) => x.status === 'PENDING')
+        .map((x) => ({
+          id: x.request_id,
+          type: '刪除申請配額',
+          company: String(x.company_name || '-'),
+          reason: String(x.reason || ''),
+          createdAt: String(x.created_at || ''),
+        }));
+      const entityPending = entityRows
+        .filter((x) => x.status === 'PENDING')
+        .map((x) => ({
+          id: x.request_id,
+          type: x.module === 'approvals' ? '刪除批文' : x.module === 'employers' ? '刪除僱主' : '刪除勞工',
+          company: String(x.company_name || '-'),
+          reason: String(x.reason || ''),
+          createdAt: String(x.created_at || ''),
+        }));
+      const pendingAll = [...filePending, ...quotaPending, ...entityPending]
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+      setPendingApprovalCount(pendingAll.length);
+      setPendingPreviewItems(pendingAll.slice(0, 20));
+    } catch {
+      setPendingApprovalCount(0);
+      setPendingPreviewItems([]);
+    }
   };
 
   useEffect(() => {
-    refreshMessages();
-    const unsub = subscribeInAppMessages(refreshMessages);
-    return () => unsub();
+    void refreshIndicators();
+    const unsubMsg = subscribeInAppMessages(() => {
+      void refreshIndicators();
+    });
+    const unsubDelete = subscribeDeleteNotice(() => {
+      void refreshIndicators();
+    });
+    return () => {
+      unsubMsg();
+      unsubDelete();
+    };
   }, [identity.userId, identity.roleKey]);
+  const pendingUnreadCount = pendingPreviewItems.filter((x) => !pendingReadMap[x.id]).length;
+  const displayNoticeCount = unreadCount > 0 ? unreadCount : pendingUnreadCount;
+
+  const markPendingRead = (id: string) => {
+    setPendingReadMap((prev) => {
+      const next = { ...prev, [id]: Date.now() };
+      writePendingNoticeReads(next);
+      return next;
+    });
+  };
+
+  const markAllNotificationsRead = () => {
+    markAllInAppRead(identity.userId, identity.roleKey);
+    setPendingReadMap((prev) => {
+      const next = { ...prev };
+      for (const item of pendingPreviewItems) {
+        next[item.id] = Date.now();
+      }
+      writePendingNoticeReads(next);
+      return next;
+    });
+  };
 
   const handleLogout = () => {
     logout();
@@ -58,12 +165,14 @@ const Layout: React.FC = () => {
   const navItems = [
     { to: '/dashboard', icon: LayoutDashboard, label: '業務概覽' },
     { to: '/employers', icon: Building2, label: '僱主管理' },
+    { to: '/quota-applications', icon: ClipboardList, label: '申請配額' },
     { to: '/approvals', icon: FileText, label: '批文管理' },
     { to: '/workers', icon: Users, label: '勞工管理' },
     { to: '/jobs', icon: Briefcase, label: '職位管理' },
     { to: '/deletion-approvals', icon: ShieldCheck, label: '審批管理' },
     { to: '/settings', icon: Settings, label: '系統設定' },
   ];
+  const visibleNavItems = navItems.filter((item) => canAccessPath(item.to, identity.roleKey));
 
   return (
     <div className="min-h-screen bg-apple-gray flex">
@@ -88,13 +197,13 @@ const Layout: React.FC = () => {
         </div>
 
         <div className="flex-1 overflow-y-auto px-4 space-y-1">
-          {navItems.map((item) => (
+          {visibleNavItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
               onClick={() => setIsSidebarOpen(false)}
               className={({ isActive }) => clsx(
-                "flex items-center space-x-3 px-3 py-2.5 rounded-apple-sm transition-colors duration-200",
+                "relative flex items-center space-x-3 px-3 py-2.5 rounded-apple-sm transition-colors duration-200",
                 isActive 
                   ? "bg-apple-blue/10 text-apple-blue font-medium" 
                   : "text-gray-600 hover:bg-gray-100/80 hover:text-gray-900"
@@ -102,6 +211,11 @@ const Layout: React.FC = () => {
             >
               <item.icon className="w-5 h-5" />
               <span>{item.label}</span>
+              {item.to === '/deletion-approvals' && pendingApprovalCount > 0 && (
+                <span className="absolute right-2 top-1 min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[10px] leading-4 text-center">
+                  {pendingApprovalCount > 99 ? '99+' : pendingApprovalCount}
+                </span>
+              )}
             </NavLink>
           ))}
         </div>
@@ -109,24 +223,22 @@ const Layout: React.FC = () => {
         <div className="p-4 border-t border-gray-200/50">
           <div className="flex items-center justify-between px-3 py-2">
             <div className="flex flex-col">
-              <span className="text-sm font-medium text-gray-900">{user?.full_name || user?.username}</span>
-              <span className="text-xs text-gray-500 capitalize">{user?.role_key?.replace('_', ' ')}</span>
+              <span className="text-sm font-medium text-gray-900">{userDisplayPipe(user)}</span>
+              <span className="text-xs text-gray-500">{getRoleLabel(user?.role_key || '')}</span>
             </div>
             <div className="relative flex items-center gap-1">
               <button
                 onClick={() => {
-                  const next = !noticeOpen;
-                  setNoticeOpen(next);
-                  if (next) markAllInAppRead(identity.userId, identity.roleKey);
+                  setNoticeOpen(!noticeOpen);
                 }}
                 className="p-2 text-gray-500 hover:text-apple-blue hover:bg-blue-50 rounded-full transition-colors relative"
                 title="消息通知"
                 aria-label="打開消息通知"
               >
                 <Bell className="w-4 h-4" />
-                {unreadCount > 0 && (
+                {displayNoticeCount > 0 && (
                   <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[10px] leading-4 text-center">
-                    {unreadCount > 99 ? '99+' : unreadCount}
+                    {displayNoticeCount > 99 ? '99+' : displayNoticeCount}
                   </span>
                 )}
               </button>
@@ -147,19 +259,57 @@ const Layout: React.FC = () => {
           <div className="absolute left-3 right-3 bottom-20 lg:left-72 lg:right-auto lg:bottom-6 lg:w-[420px] max-h-[70vh] overflow-y-auto bg-white border border-gray-200 rounded-2xl shadow-xl p-3">
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-sm font-semibold text-gray-900">消息通知</h3>
-              <button
-                type="button"
-                onClick={() => setNoticeOpen(false)}
-                className="px-2 py-1 text-xs rounded border border-gray-200 hover:bg-gray-50"
-                aria-label="關閉消息通知"
-              >
-                關閉
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={markAllNotificationsRead}
+                  className="px-2 py-1 text-xs rounded border border-blue-200 text-blue-700 hover:bg-blue-50"
+                  aria-label="全部已閱"
+                >
+                  全部已閱
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNoticeOpen(false)}
+                  className="px-2 py-1 text-xs rounded border border-gray-200 hover:bg-gray-50"
+                  aria-label="關閉消息通知"
+                >
+                  關閉
+                </button>
+              </div>
             </div>
-            {messages.length === 0 ? (
+            {messages.length === 0 && pendingPreviewItems.length === 0 ? (
               <div className="px-3 py-6 text-sm text-gray-400 text-center">暫無新消息</div>
             ) : (
               <div role="list" className="space-y-2">
+                {messages.length === 0 && pendingPreviewItems.length > 0 && (
+                  pendingPreviewItems.map((m) => (
+                    <button
+                      type="button"
+                      key={m.id}
+                      onClick={() => markPendingRead(m.id)}
+                      className={clsx(
+                        "w-full text-left p-3 rounded-xl border transition-colors",
+                        pendingReadMap[m.id]
+                          ? "border-gray-200 bg-white"
+                          : "border-blue-200 bg-blue-50"
+                      )}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="text-sm font-semibold text-gray-900">{m.type}</div>
+                        <span className={clsx(
+                          "text-xs px-2 py-0.5 rounded-full",
+                          pendingReadMap[m.id] ? "bg-gray-100 text-gray-600" : "bg-amber-100 text-amber-700"
+                        )}>
+                          {pendingReadMap[m.id] ? '已閱' : '待審批'}
+                        </span>
+                      </div>
+                      <div className="text-xs text-gray-600 mt-1">公司：{m.company}</div>
+                      <div className="text-xs text-gray-600 mt-1">原因：{m.reason || '-'}</div>
+                      <div className="text-[11px] text-gray-400 mt-2">{formatAt(m.createdAt)}</div>
+                    </button>
+                  ))
+                )}
                 {messages.slice(0, 20).map((m) => (
                   <button
                     key={m.id}

@@ -7,19 +7,53 @@ import { getWorkers } from '../api/workers';
 import { getApprovals, ApprovalReminder, getApprovalReminders, markApprovalReminderRead, reRemindApprovalReminder, setApprovalReminders } from '../api/approvals';
 import { parseEmploymentMonths } from '../utils/workersForm';
 import { generateApprovalReminders } from '../utils/approvalsRules';
+import { userDisplayPipe } from '../utils/userDisplayPipe';
+
+const DASHBOARD_CACHE_KEY = 'dashboardStats';
+const DASHBOARD_CACHE_TS_KEY = 'dashboardStatsSavedAt';
+const DASHBOARD_CACHE_TTL_MS = 3 * 60 * 1000;
+const DASHBOARD_PERF_KEY = 'dashboard_perf_metrics_v1';
+
+const readCacheListCount = (key: string) => {
+  try {
+    const raw = localStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : null;
+    const items = Array.isArray(parsed?.items) ? parsed.items : [];
+    return items.length;
+  } catch {
+    return 0;
+  }
+};
+
+const readDashboardCache = () => {
+  try {
+    const raw = sessionStorage.getItem(DASHBOARD_CACHE_KEY);
+    return raw
+      ? JSON.parse(raw)
+      : { users: 0, employers: 0, workers: 0, approvals: 0 };
+  } catch {
+    return { users: 0, employers: 0, workers: 0, approvals: 0 };
+  }
+};
+
+const writeDashboardCache = (counts: { users: number; employers: number; workers: number; approvals: number }) => {
+  sessionStorage.setItem(DASHBOARD_CACHE_KEY, JSON.stringify(counts));
+  sessionStorage.setItem(DASHBOARD_CACHE_TS_KEY, String(Date.now()));
+};
 
 const Dashboard: React.FC = () => {
   const user = useAuthStore((state) => state.user);
-  const [loading, setLoading] = useState(() => !sessionStorage.getItem('dashboardStats'));
+  const [loading, setLoading] = useState(() => !sessionStorage.getItem(DASHBOARD_CACHE_KEY));
   const [warnings, setWarnings] = useState<ApprovalReminder[]>([]);
   const [workerRenewWarnings, setWorkerRenewWarnings] = useState<Array<{ id: number; name: string; daysLeft: number; expiresAt: string }>>([]);
   const [counts, setCounts] = useState(() => {
-    const cached = sessionStorage.getItem('dashboardStats');
-    return cached ? JSON.parse(cached) : {
-      users: 0,
-      employers: 0,
-      workers: 0,
-      approvals: 0,
+    const cached = readDashboardCache();
+    if (cached.users || cached.employers || cached.workers || cached.approvals) return cached;
+    return {
+      users: readCacheListCount('cache_users_list_v1'),
+      employers: readCacheListCount('cache_employers_list_v1'),
+      workers: readCacheListCount('cache_workers_list_v1'),
+      approvals: readCacheListCount('cache_approvals_list_v1'),
     };
   });
 
@@ -27,34 +61,48 @@ const Dashboard: React.FC = () => {
     let isMounted = true;
     
     const fetchStats = async () => {
+      const startedAt = performance.now();
+      const metric: Record<string, number> = {};
       try {
-        // 並行發送請求，不互相阻塞，各自更新狀態
+        const savedAt = Number(sessionStorage.getItem(DASHBOARD_CACHE_TS_KEY) || 0);
+        const isFresh = Date.now() - savedAt <= DASHBOARD_CACHE_TTL_MS;
+        if (isFresh) setLoading(false);
+
+        const timed = async <T,>(name: string, p: Promise<T>) => {
+          const t0 = performance.now();
+          try {
+            return await p;
+          } finally {
+            metric[name] = Number((performance.now() - t0).toFixed(1));
+          }
+        };
+
         getUsers().then(res => {
           if (isMounted) {
             setCounts(prev => {
               const next = { ...prev, users: res?.length || 0 };
-              sessionStorage.setItem('dashboardStats', JSON.stringify(next));
+              writeDashboardCache(next);
               return next;
             });
           }
         }).catch(console.error);
 
-        getEmployers().then(res => {
+        timed('employers', getEmployers()).then(res => {
           if (isMounted) {
             setCounts(prev => {
               const next = { ...prev, employers: res?.length || 0 };
-              sessionStorage.setItem('dashboardStats', JSON.stringify(next));
+              writeDashboardCache(next);
               return next;
             });
           }
         }).catch(console.error);
 
-        getWorkers().then(res => {
+        timed('workers', getWorkers({ limit: 500 })).then(res => {
           if (isMounted) {
             const workers = res || [];
             setCounts(prev => {
               const next = { ...prev, workers: workers.length || 0 };
-              sessionStorage.setItem('dashboardStats', JSON.stringify(next));
+              writeDashboardCache(next);
               return next;
             });
 
@@ -95,12 +143,12 @@ const Dashboard: React.FC = () => {
           }
         }).catch(console.error);
 
-        getApprovals().then(res => {
+        timed('approvals', getApprovals({ limit: 500 })).then(res => {
           if (isMounted) {
             const data = res || [];
             setCounts(prev => {
               const next = { ...prev, approvals: data.length };
-              sessionStorage.setItem('dashboardStats', JSON.stringify(next));
+              writeDashboardCache(next);
               return next;
             });
 
@@ -118,6 +166,8 @@ const Dashboard: React.FC = () => {
             setApprovalReminders(next);
             setWarnings(next.sort((a, b) => a.window_days - b.window_days));
             setLoading(false); // 批文載入完成後隱藏警告區塊的 loading
+            metric.total = Number((performance.now() - startedAt).toFixed(1));
+            sessionStorage.setItem(DASHBOARD_PERF_KEY, JSON.stringify({ ...metric, savedAt: Date.now() }));
           }
         }).catch(err => {
           console.error(err);
@@ -148,7 +198,7 @@ const Dashboard: React.FC = () => {
     <div className="space-y-6">
       <div className="bg-white rounded-apple-sm p-8 shadow-sm border border-gray-100">
         <h1 className="text-2xl font-semibold text-gray-900 mb-2">
-          歡迎回來，{user?.full_name || user?.username || '管理員'}
+          歡迎回來，{userDisplayPipe(user)}
         </h1>
         <p className="text-gray-500">
           這裡是 Work4HK 勞務管理系統總覽。您可以在此查看系統最新狀態與統計數據。

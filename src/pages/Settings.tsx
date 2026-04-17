@@ -1,5 +1,5 @@
 import React, { useCallback, useRef, useState, useEffect } from 'react';
-import { Search, Plus, Edit2, Loader2, RefreshCw, Key, Eye, EyeOff, Trash2, Users2, Handshake } from 'lucide-react';
+import { Search, Plus, Edit2, Loader2, RefreshCw, Key, Eye, EyeOff, Trash2, Users2, Handshake, ScrollText } from 'lucide-react';
 import clsx from 'clsx';
 import apiClient from '../api/client';
 import Modal from '../components/Modal';
@@ -8,8 +8,9 @@ import {
 } from '../api/settings';
 import Users, { UsersHandle } from './Users';
 import { getAuthIdentity } from '../utils/authRole';
+import { GlobalAuditLog, readGlobalAuditLogs } from '../utils/auditLog';
 
-type Tab = 'partners' | 'users' | 'api_keys';
+type Tab = 'partners' | 'users' | 'api_keys' | 'audit_logs';
 
 type HttpErrorLike = {
   response?: {
@@ -24,6 +25,7 @@ const Settings: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
+  const [auditLogs, setAuditLogs] = useState<GlobalAuditLog[]>([]);
 
   const usersRef = useRef<UsersHandle>(null);
 
@@ -53,6 +55,10 @@ const Settings: React.FC = () => {
   const [showAuthPrecheckToken, setShowAuthPrecheckToken] = useState(false);
 
   const fetchData = useCallback(async () => {
+    if (activeTab === 'audit_logs') {
+      setAuditLogs(readGlobalAuditLogs());
+      return;
+    }
     if (activeTab === 'api_keys') {
       const storedKeys = localStorage.getItem('system_api_keys');
       if (storedKeys) {
@@ -190,6 +196,53 @@ const Settings: React.FC = () => {
   };
 
   const renderTable = () => {
+    if (activeTab === 'audit_logs') {
+      const visible = auditLogs.filter((x) => {
+        const q = search.trim().toLowerCase();
+        if (!q) return true;
+        const hay = `${x.module} ${x.action} ${x.actor_name} ${x.record_no || ''} ${x.details || ''}`.toLowerCase();
+        return hay.includes(q);
+      });
+      return (
+        <div className="p-4">
+          <div className="rounded-apple-sm border border-gray-200 bg-white/60 overflow-hidden">
+            <table className="min-w-full divide-y divide-gray-200 text-sm">
+              <thead className="bg-gray-50/70 text-gray-600">
+                <tr>
+                  <th className="px-4 py-3 text-left">時間</th>
+                  <th className="px-4 py-3 text-left">操作者</th>
+                  <th className="px-4 py-3 text-left">模塊</th>
+                  <th className="px-4 py-3 text-left">動作</th>
+                  <th className="px-4 py-3 text-left">內容</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {visible.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-8 text-center text-gray-500">暫無日誌記錄</td>
+                  </tr>
+                ) : (
+                  visible.map((log) => (
+                    <tr key={log.id}>
+                      <td className="px-4 py-3 whitespace-nowrap text-gray-600">{new Date(log.at).toLocaleString()}</td>
+                      <td className="px-4 py-3 whitespace-nowrap">{log.actor_name}</td>
+                      <td className="px-4 py-3 whitespace-nowrap">{log.module}</td>
+                      <td className="px-4 py-3 whitespace-nowrap">{log.action}</td>
+                      <td className="px-4 py-3 text-gray-700">
+                        {log.record_no ? `#${log.record_no} ` : ''}
+                        {log.section ? `[${log.section}] ` : ''}
+                        {log.details || '-'}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    }
+
     if (activeTab === 'api_keys') {
       return (
         <div className="p-6 max-w-3xl">
@@ -417,6 +470,7 @@ const Settings: React.FC = () => {
       case 'partners': return '合作方';
       case 'users': return '用戶管理';
       case 'api_keys': return 'API 金鑰管理';
+      case 'audit_logs': return '查看日誌';
     }
   };
 
@@ -447,7 +501,9 @@ const Settings: React.FC = () => {
       <div className="glass-panel rounded-apple overflow-hidden">
         <div className="border-b border-gray-200/50 bg-white/60 px-4 py-3">
           <div className="flex flex-wrap gap-2">
-            {(['partners', 'users', 'api_keys'] as Tab[]).map((tab) => (
+            {((getAuthIdentity().roleKey === 'super_admin'
+              ? ['partners', 'users', 'api_keys', 'audit_logs']
+              : ['partners', 'users', 'api_keys']) as Tab[]).map((tab) => (
               <button
                 key={tab}
                 onClick={() => { setActiveTab(tab); setSearch(''); }}
@@ -461,13 +517,14 @@ const Settings: React.FC = () => {
                 {tab === 'partners' && <Handshake className="w-4 h-4" />}
                 {tab === 'users' && <Users2 className="w-4 h-4" />}
                 {tab === 'api_keys' && <Key className="w-4 h-4" />}
+                {tab === 'audit_logs' && <ScrollText className="w-4 h-4" />}
                 <span>{getTabLabel(tab)}</span>
               </button>
             ))}
           </div>
         </div>
 
-        {activeTab === 'partners' && (
+        {(activeTab === 'partners' || activeTab === 'audit_logs') && (
           <div className="p-4 border-b border-gray-200/50 bg-white/30 flex items-center justify-between">
             <div className="relative w-full max-w-sm">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -475,7 +532,7 @@ const Settings: React.FC = () => {
               </div>
               <input
                 type="text"
-                placeholder={`搜尋${getTabLabel(activeTab)}...`}
+                placeholder={activeTab === 'audit_logs' ? '搜尋日誌（模塊/動作/操作者/內容）...' : `搜尋${getTabLabel(activeTab)}...`}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="block w-full pl-10 pr-3 py-2 border border-gray-200 rounded-apple-sm leading-5 bg-white/80 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all sm:text-sm"

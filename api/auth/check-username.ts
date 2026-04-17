@@ -7,10 +7,26 @@ const json = (res: any, status: number, body: any) => {
 const BACKEND_ORIGIN = 'http://119.91.50.192'
 const DEFAULT_LIMIT = 2000
 
+const readBody = async (req: any) => {
+  if (req.body && typeof req.body === 'object') return req.body;
+  const chunks: Buffer[] = [];
+  await new Promise<void>((resolve) => {
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => resolve());
+  });
+  try {
+    const raw = Buffer.concat(chunks).toString('utf-8');
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+};
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') return json(res, 405, { error: 'Method Not Allowed' })
 
-  const username = typeof req.body?.username === 'string' ? req.body.username.trim() : ''
+  const body = await readBody(req);
+  const username = typeof body?.username === 'string' ? body.username.trim() : ''
   if (!username) return json(res, 400, { error: 'Invalid username' })
 
   const token =
@@ -53,4 +69,3 @@ export default async function handler(req: any, res: any) {
     return json(res, 502, { error: 'Upstream precheck failed', detail: String(e?.message || e) })
   }
 }
-

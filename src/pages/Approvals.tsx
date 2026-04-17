@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Search, Edit2, Loader2, RefreshCw, Trash2, FolderOpen, UploadCloud, Download, FileText } from 'lucide-react';
-import { Approval, getApprovals, createApproval, updateApproval, deleteApproval, ApprovalCreate, DEPARTMENT_OPTIONS, QuotaDetail, getApprovalQuotaDetails, setApprovalQuotaDetails, appendApprovalVersionLog } from '../api/approvals';
+import { Approval, getApprovals, createApproval, updateApproval, deleteApproval, ApprovalCreate, DEPARTMENT_OPTIONS, QuotaDetail, getApprovalQuotaDetails, getApprovalQuotaMap, setApprovalQuotaDetails, appendApprovalVersionLog } from '../api/approvals';
 import { Employer, getEmployers } from '../api/employers';
 import { Partner, getPartners } from '../api/settings';
 import Modal from '../components/Modal';
@@ -14,6 +14,7 @@ import FileDeleteActionDialog from '../components/FileDeleteActionDialog';
 import { pushDeleteNotice } from '../utils/deleteNotifications';
 import { pushInAppMessage } from '../utils/inAppMessages';
 import { markDeletePending, releaseDeletePending } from '../utils/deletePendingState';
+import { submitEntityDeleteRequest } from '../utils/entityDeleteRequests';
 
 interface StoredApprovalFile {
   id: string;
@@ -44,6 +45,42 @@ type QuotaDetailForm = {
 };
 
 const APPROVAL_FOLDERS = ['批文文件', '申請文件', '其他'];
+const QUOTA_APP_CACHE_KEY = 'quota_application_records_v1';
+const QUOTA_APP_STATUS_OPTIONS = ['製作文件', '已遞交', '本地招聘', '最終審核', '已批出'] as const;
+const QUOTA_APP_CATEGORY_OPTIONS = ['新申請', '續約', '新申請及續約'] as const;
+const QUOTA_APP_BUSINESS_MODE_OPTIONS = ['獨資經營', '合夥經營', '有限公司'] as const;
+const QUOTA_APP_LICENSE_OPTIONS = ['毋須領有', '須領有'] as const;
+
+type QuotaApplicationStatus = (typeof QUOTA_APP_STATUS_OPTIONS)[number];
+type QuotaApplicationCategory = (typeof QUOTA_APP_CATEGORY_OPTIONS)[number];
+type QuotaApplicationBusinessMode = (typeof QUOTA_APP_BUSINESS_MODE_OPTIONS)[number];
+type QuotaApplicationLicense = (typeof QUOTA_APP_LICENSE_OPTIONS)[number];
+
+type QuotaApplicationForm = {
+  application_no: string;
+  submitted_at: string;
+  status: QuotaApplicationStatus;
+  category: QuotaApplicationCategory;
+  employer_id?: number;
+  employer_name_cn: string;
+  employer_name_en: string;
+  business_mode: QuotaApplicationBusinessMode;
+  company_incorporation_number: string;
+  business_registration_number: string;
+  business_type: string;
+  applicant_address_cn: string;
+  applicant_address_en: string;
+  license_required: QuotaApplicationLicense;
+  contact_name: string;
+  contact_phone_local: string;
+  contact_email: string;
+};
+
+type QuotaApplicationRecord = QuotaApplicationForm & {
+  id: string;
+  created_at: string;
+  updated_at: string;
+};
 
 const initialForm: ApprovalCreate = {
   employer_id: undefined,
@@ -52,6 +89,26 @@ const initialForm: ApprovalCreate = {
   department: '勞工處',
   signatory_name: ''
 };
+
+const initialQuotaApplicationForm = (): QuotaApplicationForm => ({
+  application_no: '',
+  submitted_at: new Date().toISOString().slice(0, 10),
+  status: '製作文件',
+  category: '新申請',
+  employer_id: undefined,
+  employer_name_cn: '',
+  employer_name_en: '',
+  business_mode: '獨資經營',
+  company_incorporation_number: '',
+  business_registration_number: '',
+  business_type: '',
+  applicant_address_cn: '',
+  applicant_address_en: '',
+  license_required: '毋須領有',
+  contact_name: '',
+  contact_phone_local: '',
+  contact_email: '',
+});
 
 const emptyQuotaRow = (): QuotaDetailForm => ({
   quota_seq: '',
@@ -65,27 +122,23 @@ const emptyQuotaRow = (): QuotaDetailForm => ({
 });
 
 const APPROVALS_CACHE_KEY = 'cache_approvals_list_v1';
-const makeApprovalNoByDate = (items: Approval[]) => {
-  const now = new Date();
-  const day = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
-  const regex = new RegExp(`^APR-${day}-(\\d{4})$`);
-  let maxSeq = 0;
-  for (const row of items) {
-    const match = String(row.approval_number || '').toUpperCase().match(regex);
-    if (!match) continue;
-    const n = Number(match[1] || '0');
-    if (n > maxSeq) maxSeq = n;
-  }
-  return `APR-${day}-${String(maxSeq + 1).padStart(4, '0')}`;
-};
-
-
+const APPROVALS_PERF_KEY = 'approvals_perf_metrics_v1';
 const Approvals: React.FC = () => {
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
+  const [quotaSearch, setQuotaSearch] = useState('');
   const [hasLoaded, setHasLoaded] = useState(false);
+  const [quotaMapVersion, setQuotaMapVersion] = useState(0);
+  const [quotaApplications, setQuotaApplications] = useState<QuotaApplicationRecord[]>([]);
+  const [isQuotaModalOpen, setIsQuotaModalOpen] = useState(false);
+  const [isQuotaEditing, setIsQuotaEditing] = useState(false);
+  const [selectedQuotaApplicationId, setSelectedQuotaApplicationId] = useState<string | null>(null);
+  const [quotaForm, setQuotaForm] = useState<QuotaApplicationForm>(initialQuotaApplicationForm());
+  const [quotaEmployerQuery, setQuotaEmployerQuery] = useState('');
+  const [quotaEmployerDropdownOpen, setQuotaEmployerDropdownOpen] = useState(false);
+  const quotaEmployerBlurTimer = useRef<number | null>(null);
   
   // Modal states
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -98,6 +151,7 @@ const Approvals: React.FC = () => {
 
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; approvalNumber: string } | null>(null);
+  const [deleteReason, setDeleteReason] = useState('');
 
   const [isFileModalOpen, setIsFileModalOpen] = useState(false);
   const [selectedApprovalForFiles, setSelectedApprovalForFiles] = useState<Approval | null>(null);
@@ -119,10 +173,12 @@ const Approvals: React.FC = () => {
   const succeedTask = useUploadStore(s => s.succeedTask);
   const clearScope = useUploadStore(s => s.clearScope);
   const uploadTasks = useMemo(() => Object.values(tasksByScope[uploadScope] || {}), [tasksByScope, uploadScope]);
+  const quotaMap = useMemo(() => getApprovalQuotaMap(), [quotaMapVersion]);
 
   const [employers, setEmployers] = useState<Employer[]>([]);
   const [partners, setPartners] = useState<Partner[]>([]);
   const [employerQuery, setEmployerQuery] = useState('');
+  const [quotaImportId, setQuotaImportId] = useState('');
   const [partnerQuery, setPartnerQuery] = useState('');
   const [employerDropdownOpen, setEmployerDropdownOpen] = useState(false);
   const [partnerDropdownOpen, setPartnerDropdownOpen] = useState(false);
@@ -194,6 +250,63 @@ const Approvals: React.FC = () => {
     if (v.includes('T')) v = v.split('T')[0];
     if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v.replace(/-/g, '/');
     return v;
+  };
+
+  const readQuotaApplications = (): QuotaApplicationRecord[] => {
+    try {
+      const raw = localStorage.getItem(QUOTA_APP_CACHE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? (parsed as QuotaApplicationRecord[]) : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const writeQuotaApplications = (items: QuotaApplicationRecord[]) => {
+    localStorage.setItem(QUOTA_APP_CACHE_KEY, JSON.stringify(items));
+  };
+
+  const makeQuotaApplicationNoByDate = (items: QuotaApplicationRecord[]) => {
+    const now = new Date();
+    const day = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+    const regex = new RegExp(`^QA-${day}-(\\d{4})$`);
+    let maxSeq = 0;
+    for (const row of items) {
+      const match = String(row.application_no || '').toUpperCase().match(regex);
+      if (!match) continue;
+      const n = Number(match[1] || '0');
+      if (n > maxSeq) maxSeq = n;
+    }
+    return `QA-${day}-${String(maxSeq + 1).padStart(4, '0')}`;
+  };
+
+  const inferAddressFields = (address: string) => {
+    const raw = String(address || '').trim();
+    if (!raw) return { applicant_address_cn: '', applicant_address_en: '' };
+    const hasChinese = /[\u4e00-\u9fff]/.test(raw);
+    return hasChinese
+      ? { applicant_address_cn: raw, applicant_address_en: '' }
+      : { applicant_address_cn: '', applicant_address_en: raw };
+  };
+
+  const fillQuotaFormByEmployer = (e: Employer) => {
+    const businessMode = String(quotaForm.business_mode || '獨資經營') as QuotaApplicationBusinessMode;
+    const resolvedMode: QuotaApplicationBusinessMode = QUOTA_APP_BUSINESS_MODE_OPTIONS.includes(businessMode) ? businessMode : '獨資經營';
+    const address = String(e.mailing_address || e.company_address || '').trim();
+    const addressFields = inferAddressFields(address);
+    setQuotaForm((prev) => ({
+      ...prev,
+      employer_id: e.id,
+      employer_name_cn: String(e.name || '').trim(),
+      employer_name_en: String(e.english_name || '').trim(),
+      business_mode: resolvedMode,
+      company_incorporation_number: resolvedMode === '有限公司' ? String(e.company_incorporation_number || '').trim() : '',
+      business_registration_number: String(e.business_registration_number || '').trim(),
+      business_type: String(e.business_type || '').trim(),
+      ...addressFields,
+    }));
+    setQuotaEmployerQuery(getEmployerLabel(e));
+    setQuotaEmployerDropdownOpen(false);
   };
 
   const refreshPartners = async () => {
@@ -314,6 +427,14 @@ const Approvals: React.FC = () => {
     }
   }, []);
 
+  useEffect(() => {
+    setQuotaApplications(readQuotaApplications());
+  }, []);
+
+  useEffect(() => {
+    fetchApprovals();
+  }, []);
+
   const toApiDate = (value: string) => {
     const v = value.trim();
     if (!v) return null as any;
@@ -402,11 +523,13 @@ const Approvals: React.FC = () => {
   };
 
   const fetchApprovals = async () => {
+    const startedAt = performance.now();
     try {
       setLoading(true);
-      const data = await getApprovals({ limit: 1000 });
+      const data = await getApprovals({ limit: 500 });
       setApprovals(data);
       localStorage.setItem(APPROVALS_CACHE_KEY, JSON.stringify({ items: data, savedAt: Date.now() }));
+      sessionStorage.setItem(APPROVALS_PERF_KEY, JSON.stringify({ loadMs: Number((performance.now() - startedAt).toFixed(1)), size: data.length, savedAt: Date.now() }));
       setError('');
       setHasLoaded(true);
     } catch (err: any) {
@@ -474,12 +597,141 @@ const Approvals: React.FC = () => {
     });
   }, [approvals, search, getEmployerDisplayById]);
 
+  const filteredQuotaEmployers = useMemo(() => {
+    const q = quotaEmployerQuery.trim().toLowerCase();
+    const source = q
+      ? employers.filter((e) => {
+          const hay = `${e.name || ''} ${e.english_name || ''} ${e.business_registration_number || ''} ${e.company_incorporation_number || ''}`.toLowerCase();
+          return hay.includes(q);
+        })
+      : employers;
+    return source.slice(0, 8);
+  }, [employers, quotaEmployerQuery]);
+
+  const visibleQuotaApplications = useMemo(() => {
+    const q = quotaSearch.trim().toLowerCase();
+    if (!q) return quotaApplications;
+    return quotaApplications.filter((row) => {
+      const hay = `${row.employer_name_cn || ''} ${row.employer_name_en || ''} ${row.application_no || ''} ${row.status || ''}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }, [quotaApplications, quotaSearch]);
+
+  const importableQuotaApplications = useMemo(() => {
+    const employerId = Number(formData.employer_id || 0);
+    if (!employerId) return [] as QuotaApplicationRecord[];
+    return quotaApplications.filter((row) => {
+      const sameEmployer = Number(row.employer_id || 0) === employerId;
+      const approved = String(row.status || '') === '已批出';
+      return sameEmployer && approved;
+    });
+  }, [quotaApplications, formData.employer_id]);
+
+  const handleOpenQuotaCreate = () => {
+    ensureLookupsLoaded();
+    setIsQuotaEditing(false);
+    setSelectedQuotaApplicationId(null);
+    setQuotaEmployerQuery('');
+    setQuotaEmployerDropdownOpen(false);
+    setQuotaForm({
+      ...initialQuotaApplicationForm(),
+      application_no: makeQuotaApplicationNoByDate(quotaApplications),
+    });
+    setIsQuotaModalOpen(true);
+  };
+
+  const handleOpenQuotaEdit = (row: QuotaApplicationRecord) => {
+    ensureLookupsLoaded();
+    setIsQuotaEditing(true);
+    setSelectedQuotaApplicationId(row.id);
+    setQuotaEmployerQuery(String(row.employer_name_cn || row.employer_name_en || '').trim());
+    setQuotaEmployerDropdownOpen(false);
+    setQuotaForm({
+      application_no: row.application_no,
+      submitted_at: row.submitted_at,
+      status: row.status,
+      category: row.category,
+      employer_id: row.employer_id,
+      employer_name_cn: row.employer_name_cn,
+      employer_name_en: row.employer_name_en,
+      business_mode: row.business_mode,
+      company_incorporation_number: row.company_incorporation_number,
+      business_registration_number: row.business_registration_number,
+      business_type: row.business_type,
+      applicant_address_cn: row.applicant_address_cn,
+      applicant_address_en: row.applicant_address_en,
+      license_required: row.license_required,
+      contact_name: row.contact_name,
+      contact_phone_local: row.contact_phone_local,
+      contact_email: row.contact_email,
+    });
+    setIsQuotaModalOpen(true);
+  };
+
+  const handleTerminateQuotaApplication = (row: QuotaApplicationRecord) => {
+    if (!window.confirm(`確定要終止申請「${row.application_no}」嗎？`)) return;
+    const next = quotaApplications.filter((it) => it.id !== row.id);
+    setQuotaApplications(next);
+    writeQuotaApplications(next);
+  };
+
+  const handleSaveQuotaApplication = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quotaForm.employer_name_cn && !quotaForm.employer_name_en) {
+      alert('請先選擇申請者（僱主）');
+      return;
+    }
+    if (!quotaForm.application_no.trim()) {
+      alert('請輸入申請編號');
+      return;
+    }
+    if (!quotaForm.submitted_at) {
+      alert('請輸入遞交日期');
+      return;
+    }
+    if (!quotaForm.contact_name.trim() || !quotaForm.contact_phone_local.trim() || !quotaForm.contact_email.trim()) {
+      alert('請完整填寫申請負責人的聯絡資料');
+      return;
+    }
+    if (!/^[0-9]{7,11}$/.test(quotaForm.contact_phone_local.trim())) {
+      alert('本地電話號碼格式不正確（7-11位數字）');
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(quotaForm.contact_email.trim())) {
+      alert('電郵格式不正確');
+      return;
+    }
+
+    const now = new Date().toISOString();
+    if (isQuotaEditing && selectedQuotaApplicationId) {
+      const next = quotaApplications.map((row) =>
+        row.id === selectedQuotaApplicationId
+          ? { ...row, ...quotaForm, updated_at: now }
+          : row
+      );
+      setQuotaApplications(next);
+      writeQuotaApplications(next);
+    } else {
+      const record: QuotaApplicationRecord = {
+        id: `qa-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        ...quotaForm,
+        created_at: now,
+        updated_at: now,
+      };
+      const next = [record, ...quotaApplications];
+      setQuotaApplications(next);
+      writeQuotaApplications(next);
+    }
+    setIsQuotaModalOpen(false);
+  };
+
   
 
   const handleOpenCreate = () => {
-    setFormData({ ...initialForm, approval_number: makeApprovalNoByDate(approvals) });
+    setFormData({ ...initialForm, approval_number: '' });
     setQuotaDetails([emptyQuotaRow()]);
     setEmployerQuery('');
+    setQuotaImportId('');
     setPartnerQuery('');
     setEmployerDropdownOpen(false);
     setPartnerDropdownOpen(false);
@@ -542,6 +794,7 @@ const Approvals: React.FC = () => {
         : [emptyQuotaRow()]
     );
     setEmployerQuery(getEmployerDisplayById(employerId, approval.employer_name));
+    setQuotaImportId('');
     setPartnerQuery(getPartnerDisplayById(partnerId, approval.partner_name));
     ensureLookupsLoaded();
     setIsEditing(true);
@@ -554,6 +807,7 @@ const Approvals: React.FC = () => {
       id: approval.id,
       approvalNumber: String(approval.approval_number || '').toUpperCase(),
     });
+    setDeleteReason('');
     setDeleteModalOpen(true);
   };
 
@@ -695,6 +949,34 @@ const Approvals: React.FC = () => {
   const handleConfirmDelete = async () => {
     if (!deleteTarget) return;
     const targetId = deleteTarget.id;
+    if (!superAdmin) {
+      const reason = String(deleteReason || '').trim();
+      if (!reason) {
+        alert('請填寫刪除理由');
+        return;
+      }
+      setSaving(true);
+      try {
+        const payload = approvals.find((x) => x.id === targetId);
+        const company = getEmployerDisplayById((payload as any)?.employer_id ?? (payload as any)?.employerId, payload?.employer_name);
+        const resp = submitEntityDeleteRequest({
+          module: 'approvals',
+          entityId: targetId,
+          recordNo: deleteTarget.approvalNumber,
+          companyName: company || '',
+          reason,
+        });
+        alert(String((resp as any)?.message || '已提交刪除申請，等待超級管理員審批'));
+        setDeleteModalOpen(false);
+        setDeleteTarget(null);
+        setDeleteReason('');
+      } catch (err: any) {
+        alert(formatApiError(err));
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
     const prevApprovals = approvals;
 
     setApprovals(prev => {
@@ -704,6 +986,7 @@ const Approvals: React.FC = () => {
     });
     setDeleteModalOpen(false);
     setDeleteTarget(null);
+    setDeleteReason('');
     cleanupApprovalFiles(targetId);
 
     setSaving(true);
@@ -896,10 +1179,14 @@ const Approvals: React.FC = () => {
         if (isEditing && selectedId) {
           const updated = await updateApproval(selectedId, data);
           setApprovalQuotaDetails(selectedId, serializeQuotaRows());
+          setQuotaMapVersion(v => v + 1);
           return updated;
         } else {
           const created = await createApproval(data);
-          if (created?.id) setApprovalQuotaDetails(Number(created.id), serializeQuotaRows());
+          if (created?.id) {
+            setApprovalQuotaDetails(Number(created.id), serializeQuotaRows());
+            setQuotaMapVersion(v => v + 1);
+          }
           return created;
         }
       };
@@ -1031,7 +1318,7 @@ const Approvals: React.FC = () => {
                       {approval.signatory_name || '-'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-apple-dark">
-                      {getApprovalQuotaDetails(approval.id).length} 個
+                      {(quotaMap[String(approval.id)] || []).length} 個
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         {formatDateDisplay((approval as any).expiry_date)}
@@ -1070,19 +1357,276 @@ const Approvals: React.FC = () => {
         </div>
       </div>
 
+      <Modal
+        isOpen={isQuotaModalOpen}
+        onClose={() => setIsQuotaModalOpen(false)}
+        title={isQuotaEditing ? '編輯申請配額' : '新增申請配額'}
+        className="max-w-3xl"
+      >
+        <form onSubmit={handleSaveQuotaApplication} className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">申請類別 *</label>
+              <select
+                value={quotaForm.category}
+                onChange={(e) => setQuotaForm((prev) => ({ ...prev, category: e.target.value as QuotaApplicationCategory }))}
+                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+              >
+                {QUOTA_APP_CATEGORY_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">申請編號 *</label>
+              <input
+                type="text"
+                value={quotaForm.application_no}
+                onChange={(e) => setQuotaForm((prev) => ({ ...prev, application_no: e.target.value.toUpperCase() }))}
+                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                required
+              />
+            </div>
+
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">申請者名稱（選擇僱主）*</label>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={quotaEmployerQuery}
+                  onChange={(e) => {
+                    setQuotaEmployerQuery(e.target.value);
+                    setQuotaEmployerDropdownOpen(true);
+                  }}
+                  onFocus={() => {
+                    if (quotaEmployerBlurTimer.current) window.clearTimeout(quotaEmployerBlurTimer.current);
+                    setQuotaEmployerDropdownOpen(true);
+                  }}
+                  onBlur={() => {
+                    quotaEmployerBlurTimer.current = window.setTimeout(() => setQuotaEmployerDropdownOpen(false), 150);
+                  }}
+                  placeholder="輸入僱主名稱或BR編號搜尋..."
+                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                  required
+                />
+                {quotaEmployerDropdownOpen && (
+                  <div className="absolute z-20 mt-2 w-full bg-white border border-gray-200 rounded-apple-sm shadow-lg overflow-hidden">
+                    {filteredQuotaEmployers.length === 0 ? (
+                      <div className="px-4 py-3 text-sm text-gray-500">找不到符合條件的僱主</div>
+                    ) : (
+                      filteredQuotaEmployers.map((e) => (
+                        <button
+                          key={e.id}
+                          type="button"
+                          className="w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors"
+                          onMouseDown={(evt) => evt.preventDefault()}
+                          onClick={() => fillQuotaFormByEmployer(e)}
+                        >
+                          <div className="text-sm font-medium text-gray-900">{e.name}</div>
+                          <div className="text-xs text-gray-500 mt-0.5">{e.english_name || ''}{e.english_name && e.business_registration_number ? ' · ' : ''}{e.business_registration_number || ''}</div>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">申請者名稱（中文）</label>
+              <input
+                type="text"
+                value={quotaForm.employer_name_cn}
+                onChange={(e) => setQuotaForm((prev) => ({ ...prev, employer_name_cn: e.target.value }))}
+                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">申請者名稱（英文）</label>
+              <input
+                type="text"
+                value={quotaForm.employer_name_en}
+                onChange={(e) => setQuotaForm((prev) => ({ ...prev, employer_name_en: e.target.value }))}
+                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">業務經營模式 *</label>
+              <select
+                value={quotaForm.business_mode}
+                onChange={(e) => {
+                  const nextMode = e.target.value as QuotaApplicationBusinessMode;
+                  const selectedEmployer = employers.find((x) => x.id === quotaForm.employer_id);
+                  setQuotaForm((prev) => ({
+                    ...prev,
+                    business_mode: nextMode,
+                    company_incorporation_number: nextMode === '有限公司' ? String(selectedEmployer?.company_incorporation_number || prev.company_incorporation_number || '').trim() : '',
+                  }));
+                }}
+                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+              >
+                {QUOTA_APP_BUSINESS_MODE_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">公司註冊證編號（CI）</label>
+              <input
+                type="text"
+                value={quotaForm.company_incorporation_number}
+                onChange={(e) => setQuotaForm((prev) => ({ ...prev, company_incorporation_number: e.target.value }))}
+                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">商業登記號碼（BR）</label>
+              <input
+                type="text"
+                value={quotaForm.business_registration_number}
+                onChange={(e) => setQuotaForm((prev) => ({ ...prev, business_registration_number: e.target.value }))}
+                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">業務性質</label>
+              <input
+                type="text"
+                value={quotaForm.business_type}
+                onChange={(e) => setQuotaForm((prev) => ({ ...prev, business_type: e.target.value }))}
+                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">遞交日期 *</label>
+              <input
+                type="date"
+                value={quotaForm.submitted_at}
+                onChange={(e) => setQuotaForm((prev) => ({ ...prev, submitted_at: e.target.value }))}
+                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">狀態 *</label>
+              <select
+                value={quotaForm.status}
+                onChange={(e) => setQuotaForm((prev) => ({ ...prev, status: e.target.value as QuotaApplicationStatus }))}
+                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+              >
+                {QUOTA_APP_STATUS_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">申請者地址（中文）</label>
+              <input
+                type="text"
+                value={quotaForm.applicant_address_cn}
+                onChange={(e) => setQuotaForm((prev) => ({ ...prev, applicant_address_cn: e.target.value }))}
+                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">申請者地址（英文）</label>
+              <input
+                type="text"
+                value={quotaForm.applicant_address_en}
+                onChange={(e) => setQuotaForm((prev) => ({ ...prev, applicant_address_en: e.target.value }))}
+                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">合法經營業務所需牌照 *</label>
+              <select
+                value={quotaForm.license_required}
+                onChange={(e) => setQuotaForm((prev) => ({ ...prev, license_required: e.target.value as QuotaApplicationLicense }))}
+                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+              >
+                {QUOTA_APP_LICENSE_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div className="border border-gray-200 rounded-apple-sm p-4 bg-white/40">
+            <div className="text-sm font-semibold text-gray-800 mb-3">申請負責人的聯絡資料</div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">姓名 *</label>
+                <input
+                  type="text"
+                  value={quotaForm.contact_name}
+                  onChange={(e) => setQuotaForm((prev) => ({ ...prev, contact_name: e.target.value }))}
+                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">本地電話號碼 *</label>
+                <input
+                  type="text"
+                  value={quotaForm.contact_phone_local}
+                  onChange={(e) => setQuotaForm((prev) => ({ ...prev, contact_phone_local: e.target.value.replace(/[^\d]/g, '').slice(0, 11) }))}
+                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                  placeholder="7-11位數字"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">電郵 *</label>
+                <input
+                  type="email"
+                  value={quotaForm.contact_email}
+                  onChange={(e) => setQuotaForm((prev) => ({ ...prev, contact_email: e.target.value }))}
+                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                  required
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="pt-4 flex justify-end space-x-3 border-t border-gray-100 mt-6">
+            <button
+              type="button"
+              onClick={() => setIsQuotaModalOpen(false)}
+              className="px-4 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-apple-sm font-medium transition-colors"
+            >
+              取消
+            </button>
+            <button
+              type="submit"
+              className="px-4 py-2 bg-apple-blue hover:bg-blue-600 text-white rounded-apple-sm font-medium transition-colors"
+            >
+              {isQuotaEditing ? '儲存修改' : '建立申請'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
       {deleteModalOpen && deleteTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
           <div className="bg-gray-900 rounded-apple w-full max-w-md p-6 shadow-xl border border-gray-800">
-            <h3 className="text-white font-semibold text-sm mb-4">http://localhost:5176 顯示</h3>
-            <p className="text-gray-200 text-base mb-8 leading-relaxed">
-              確定要刪除批文「{deleteTarget.approvalNumber}」嗎？刪除後數據無法回復。
+            <h3 className="text-white font-semibold text-sm mb-4">系統提示</h3>
+            <p className="text-gray-200 text-base mb-4 leading-relaxed">
+              {superAdmin
+                ? `確定要刪除批文「${deleteTarget.approvalNumber}」嗎？刪除後數據無法回復。`
+                : `確定要申請刪除批文「${deleteTarget.approvalNumber}」嗎？需經超級管理員審批後才會正式刪除。`}
             </p>
+            {!superAdmin && (
+              <div className="mb-4">
+                <label className="block text-sm text-gray-300 mb-1">刪除理由 *</label>
+                <textarea
+                  value={deleteReason}
+                  onChange={(e) => setDeleteReason(e.target.value)}
+                  rows={3}
+                  className="w-full px-3 py-2 rounded border border-gray-600 bg-gray-800 text-white focus:outline-none focus:ring-2 focus:ring-apple-blue/50"
+                  placeholder="請輸入申請刪除原因"
+                />
+              </div>
+            )}
             <div className="flex justify-end space-x-3">
               <button
                 type="button"
                 onClick={() => {
                   setDeleteModalOpen(false);
                   setDeleteTarget(null);
+                  setDeleteReason('');
                 }}
                 disabled={saving}
                 className="px-5 py-2 rounded-apple-sm text-sm font-medium bg-gray-700 text-white hover:bg-gray-600 transition-colors"
@@ -1093,10 +1637,10 @@ const Approvals: React.FC = () => {
                 type="button"
                 onClick={handleConfirmDelete}
                 disabled={saving}
-                className="px-5 py-2 rounded-apple-sm text-sm font-medium bg-red-600 text-white hover:bg-red-700 transition-colors flex items-center"
+                className="px-5 py-2 rounded-apple-sm text-sm font-medium bg-apple-blue text-white hover:bg-blue-600 transition-colors flex items-center"
               >
                 {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                確認刪除
+                {superAdmin ? '確認刪除' : '提交刪除申請'}
               </button>
             </div>
           </div>
@@ -1335,6 +1879,7 @@ const Approvals: React.FC = () => {
                   onChange={(e) => {
                     setEmployerQuery(e.target.value);
                     setEmployerDropdownOpen(true);
+                    setQuotaImportId('');
                     setFormData(prev => ({ ...prev, employer_id: undefined }));
                   }}
                   onFocus={() => {
@@ -1362,6 +1907,7 @@ const Approvals: React.FC = () => {
                           onClick={() => {
                             setFormData(prev => ({ ...prev, employer_id: e.id }));
                             setEmployerQuery(getEmployerLabel(e));
+                            setQuotaImportId('');
                             setEmployerDropdownOpen(false);
                           }}
                         >
@@ -1441,7 +1987,7 @@ const Approvals: React.FC = () => {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">審批編號 *</label>
-              <div className="flex items-center gap-2">
+              <div className="space-y-2">
                 <input
                   type="text"
                   value={String(formData.approval_number || '').toUpperCase()}
@@ -1449,17 +1995,30 @@ const Approvals: React.FC = () => {
                   className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
                   required
                 />
-                {!isEditing && (
-                  <button
-                    type="button"
-                    onClick={() => setFormData({ ...formData, approval_number: makeApprovalNoByDate(approvals) })}
-                    className="px-3 py-2 text-xs rounded border border-gray-200 hover:bg-gray-50"
-                  >
-                    重產生
-                  </button>
-                )}
+                <select
+                  value={quotaImportId}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    setQuotaImportId(id);
+                    const selected = importableQuotaApplications.find((x) => x.id === id);
+                    if (!selected) return;
+                    const appNo = String(selected.application_no || '').trim().toUpperCase();
+                    if (!appNo) return;
+                    setFormData((prev) => ({ ...prev, approval_number: appNo }));
+                  }}
+                  disabled={!formData.employer_id}
+                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all disabled:bg-gray-50 disabled:text-gray-400"
+                >
+                  <option value="">
+                    {formData.employer_id ? '選擇已批出申請配額以導入申請編號' : '請先選擇僱主'}
+                  </option>
+                  {importableQuotaApplications.map((row) => (
+                    <option key={row.id} value={row.id}>
+                      {`${String(row.application_no || '(未填申請編號)').toUpperCase()} · ${String(row.submitted_at || '未填日期')}`}
+                    </option>
+                  ))}
+                </select>
               </div>
-              <p className="text-xs text-gray-500 mt-1 ml-1">格式：`APR-YYYYMMDD-流水號`，可追溯當日建立順序</p>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">發證部門</label>

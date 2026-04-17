@@ -11,6 +11,12 @@ import filesDeleteHandler from './api/ai/files-delete'
 import filesDeleteRequestHandler from './api/ai/files-delete-request'
 import filesDeleteReviewHandler from './api/ai/files-delete-review'
 import filesDeleteRequestsHandler from './api/ai/files-delete-requests'
+import filesDeleteRequestsPruneHandler from './api/ai/files-delete-requests-prune'
+import checkUsernameHandler from './api/auth/check-username'
+import authLoginHandler from './api/auth/login'
+import checkUserUniqueHandler from './api/auth/check-user-unique'
+import resolveLoginIdentityHandler from './api/auth/resolve-login-identity'
+import changePasswordHandler from './api/auth/change-password'
 
 const brOcrDevPlugin = () => {
   return {
@@ -60,6 +66,35 @@ const brOcrDevPlugin = () => {
       server.middlewares.use('/api/ai/files-delete-requests', async (req: any, res: any) => {
         attachQuery(req);
         return filesDeleteRequestsHandler(req, res);
+      });
+
+      server.middlewares.use('/api/ai/files-delete-requests-prune', async (req: any, res: any) => {
+        attachQuery(req);
+        return filesDeleteRequestsPruneHandler(req, res);
+      });
+
+      server.middlewares.use('/api/auth/check-username', async (req: any, res: any) => {
+        attachQuery(req);
+        return checkUsernameHandler(req, res);
+      });
+      server.middlewares.use('/api/auth/login', async (req: any, res: any) => {
+        attachQuery(req);
+        return authLoginHandler(req, res);
+      });
+
+      server.middlewares.use('/api/auth/check-user-unique', async (req: any, res: any) => {
+        attachQuery(req);
+        return checkUserUniqueHandler(req, res);
+      });
+
+      server.middlewares.use('/api/auth/resolve-login-identity', async (req: any, res: any) => {
+        attachQuery(req);
+        return resolveLoginIdentityHandler(req, res);
+      });
+
+      server.middlewares.use('/api/auth/change-password', async (req: any, res: any) => {
+        attachQuery(req);
+        return changePasswordHandler(req, res);
       });
 
       server.middlewares.use('/api/ai/br-ocr', async (req: any, res: any) => {
@@ -352,7 +387,7 @@ export default defineConfig(({ mode }) => {
         target: 'http://119.91.50.192',
         changeOrigin: true,
         bypass: (req) => {
-          if (req.url?.startsWith('/api/ai/') || req.url?.startsWith('/api/wechat/') || req.url?.startsWith('/api/auth/check-username')) return req.url
+          if (req.url?.startsWith('/api/ai/') || req.url?.startsWith('/api/wechat/') || req.url?.startsWith('/api/auth/check-username') || req.url?.startsWith('/api/auth/login') || req.url?.startsWith('/api/auth/check-user-unique') || req.url?.startsWith('/api/auth/resolve-login-identity') || req.url?.startsWith('/api/auth/change-password')) return req.url
           return undefined
         },
       },
