@@ -1,5 +1,6 @@
 import apiClient from './client';
 import { appendGlobalAuditLog } from '../utils/auditLog';
+import { deleteWorkerProfile } from '../utils/workerProfile';
 
 export interface Worker {
   id: number;
@@ -62,6 +63,7 @@ export const updateWorker = async (id: number, data: Partial<WorkerCreate>) => {
 
 export const deleteWorker = async (id: number) => {
   const response = await apiClient.delete(`/labours/${id}`);
+  deleteWorkerProfile(id);
   appendGlobalAuditLog({
     module: 'workers',
     action: 'delete',

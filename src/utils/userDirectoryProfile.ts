@@ -69,3 +69,13 @@ export const saveExtendedProfile = (user: { id?: string | number; username?: str
   }
   writeMap(map);
 };
+
+export const removeExtendedProfile = (user: { id?: string | number; username?: string }) => {
+  const map = readMap();
+  const idKey = String(user.id ?? '').trim();
+  if (idKey) delete map[`id:${idKey}`];
+  if (user.username) {
+    delete map[`username:${String(user.username).trim().toLowerCase()}`];
+  }
+  writeMap(map);
+};

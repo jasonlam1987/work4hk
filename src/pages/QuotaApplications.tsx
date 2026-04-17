@@ -1,11 +1,23 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle2, Edit2, Plus, Search, Trash2 } from 'lucide-react';
+import clsx from 'clsx';
 import Modal from '../components/Modal';
 import { Employer, getEmployers } from '../api/employers';
 import { getAuthIdentity, isSuperAdmin } from '../utils/authRole';
 import { appendGlobalAuditLog, GlobalAuditLog } from '../utils/auditLog';
 import { pushInAppMessage } from '../utils/inAppMessages';
 import { pushDeleteNotice } from '../utils/deleteNotifications';
+import {
+  buildCommonJobOptions,
+  CommonJobNewRequest,
+  emptyCommonJobNewRequest,
+  filterCommonJobOptions,
+  sanitizeBasicRtfHtml,
+  stripHtmlToText,
+  validateCommonJobNewRequest,
+  validateScheduleSlot,
+  WorkScheduleSlot,
+} from '../utils/quotaCommonJobRequest';
 
 const QUOTA_APP_CACHE_KEY = 'quota_application_records_v1';
 const QUOTA_APP_DRAFT_KEY = 'quota_application_drafts_v1';
@@ -28,6 +40,14 @@ type CommonJobRow = {
   apply_count_renewal: string;
 };
 
+type RenewJobAdjustment = {
+  id: string;
+  weekly_working_days: string;
+  shift_required: '' | 'NO' | 'YES';
+  schedules: WorkScheduleSlot[];
+  work_addresses: string[];
+};
+
 type QuotaApplicationForm = {
   application_no: string;
   submitted_at: string;
@@ -46,7 +66,14 @@ type QuotaApplicationForm = {
   contact_name: string;
   contact_phone_local: string;
   contact_email: string;
+  renew_old_file_no: string;
+  renew_quota_serial_no: string;
+  renew_job_adjustments: RenewJobAdjustment[];
+  appendix2_latest_cutoff_date: string;
+  appendix2_fulltime_local_total: string;
+  appendix2_same_duty_local_counts: Record<string, string>;
   common_jobs: CommonJobRow[];
+  common_job_new_requests: CommonJobNewRequest[];
 };
 
 type QuotaApplicationRecord = QuotaApplicationForm & {
@@ -94,8 +121,8 @@ type SectionKey =
 const SECTION_LABELS: { key: SectionKey; label: string }[] = [
   { key: 'applicant', label: '申請者資料' },
   { key: 'common-jobs', label: '申請常見職位' },
-  { key: 'new-jobs', label: '常見職位新申請' },
-  { key: 'renew-jobs', label: '常見職位續約' },
+  { key: 'new-jobs', label: '新申請' },
+  { key: 'renew-jobs', label: '續約申請' },
   { key: 'appendix-1', label: '附頁一' },
   { key: 'appendix-2', label: '附頁二' },
   { key: 'appendix-3a', label: '附頁三甲' },
@@ -124,7 +151,14 @@ const initialForm = (): QuotaApplicationForm => ({
   contact_name: '',
   contact_phone_local: '',
   contact_email: '',
+  renew_old_file_no: '',
+  renew_quota_serial_no: '',
+  renew_job_adjustments: [emptyRenewJobAdjustment()],
+  appendix2_latest_cutoff_date: '',
+  appendix2_fulltime_local_total: '',
+  appendix2_same_duty_local_counts: {},
   common_jobs: [],
+  common_job_new_requests: [],
 });
 
 const emptyCommonJobRow = (): CommonJobRow => ({
@@ -135,6 +169,21 @@ const emptyCommonJobRow = (): CommonJobRow => ({
   apply_count_new: '',
   apply_count_renewal: '',
 });
+
+const emptyRenewJobAdjustment = (): RenewJobAdjustment => ({
+  id: `renew-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  weekly_working_days: '',
+  shift_required: '',
+  schedules: [{ start: '', end: '' }],
+  work_addresses: [''],
+});
+
+const formatDateInputYYYYMMDD = (raw: string) => {
+  const digits = String(raw || '').replace(/[^\d]/g, '').slice(0, 8);
+  if (digits.length <= 4) return digits;
+  if (digits.length <= 6) return `${digits.slice(0, 4)}/${digits.slice(4)}`;
+  return `${digits.slice(0, 4)}/${digits.slice(4, 6)}/${digits.slice(6)}`;
+};
 
 const QuotaApplications: React.FC = () => {
   const [records, setRecords] = useState<QuotaApplicationRecord[]>([]);
@@ -155,7 +204,13 @@ const QuotaApplications: React.FC = () => {
   const [employers, setEmployers] = useState<Employer[]>([]);
   const [employerQuery, setEmployerQuery] = useState('');
   const [employerDropdownOpen, setEmployerDropdownOpen] = useState(false);
+  const [jobSelectorQuery, setJobSelectorQuery] = useState('');
+  const [jobSelectorOpen, setJobSelectorOpen] = useState(false);
+  const [activeNewJobIndex, setActiveNewJobIndex] = useState(0);
+  const [collapsedNewJobKeys, setCollapsedNewJobKeys] = useState<string[]>([]);
+  const [submitAttempted, setSubmitAttempted] = useState(false);
   const employerBlurTimer = useRef<number | null>(null);
+  const jobSelectorBlurTimer = useRef<number | null>(null);
   const noticeTimerRef = useRef<number | null>(null);
   const pageNoticeTimerRef = useRef<number | null>(null);
   const identity = getAuthIdentity();
@@ -229,6 +284,8 @@ const QuotaApplications: React.FC = () => {
     return () => {
       if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
       if (pageNoticeTimerRef.current) window.clearTimeout(pageNoticeTimerRef.current);
+      if (employerBlurTimer.current) window.clearTimeout(employerBlurTimer.current);
+      if (jobSelectorBlurTimer.current) window.clearTimeout(jobSelectorBlurTimer.current);
     };
   }, []);
 
@@ -281,6 +338,66 @@ const QuotaApplications: React.FC = () => {
       : employers;
     return source.slice(0, 8);
   }, [employers, employerQuery]);
+
+  const commonJobOptions = useMemo(() => buildCommonJobOptions(form.common_jobs), [form.common_jobs]);
+  const commonJobNewRequests = useMemo(
+    () => (Array.isArray(form.common_job_new_requests) ? form.common_job_new_requests : []),
+    [form.common_job_new_requests]
+  );
+  const activeNewJobRequest = useMemo(
+    () => commonJobNewRequests[activeNewJobIndex] || null,
+    [commonJobNewRequests, activeNewJobIndex]
+  );
+  const filteredJobOptions = useMemo(
+    () => filterCommonJobOptions(commonJobOptions, jobSelectorQuery).slice(0, 50),
+    [commonJobOptions, jobSelectorQuery]
+  );
+  const selectedJobOption = useMemo(
+    () => commonJobOptions.find((x) => x.id === activeNewJobRequest?.selected_common_job_id),
+    [commonJobOptions, activeNewJobRequest?.selected_common_job_id]
+  );
+  const newJobErrorsList = useMemo(
+    () =>
+      commonJobNewRequests.map((row) =>
+        validateCommonJobNewRequest(row, submitAttempted ? 'final' : 'draft')
+      ),
+    [commonJobNewRequests, submitAttempted]
+  );
+  const newJobErrors = useMemo(
+    () => newJobErrorsList[activeNewJobIndex] || {},
+    [newJobErrorsList, activeNewJobIndex]
+  );
+  const hasCrossDayShift = useMemo(
+    () => (activeNewJobRequest?.schedules || []).some((slot) => validateScheduleSlot(slot).crossDay),
+    [activeNewJobRequest?.schedules]
+  );
+  const skillTextLength = useMemo(
+    () => stripHtmlToText(activeNewJobRequest?.skill_requirement_html || '').length,
+    [activeNewJobRequest?.skill_requirement_html]
+  );
+  const appendix2NamedJobs = useMemo(
+    () => form.common_jobs.filter((j) => String(j.post_name || '').trim()),
+    [form.common_jobs]
+  );
+  const appendix2DutySum = useMemo(
+    () =>
+      appendix2NamedJobs.reduce((sum, job) => {
+        const n = Number(String(form.appendix2_same_duty_local_counts?.[job.id] || '').trim() || 0);
+        return sum + (Number.isFinite(n) ? n : 0);
+      }, 0),
+    [appendix2NamedJobs, form.appendix2_same_duty_local_counts]
+  );
+  const appendix2LocalTotal = useMemo(
+    () => Number(String(form.appendix2_fulltime_local_total || '').trim() || 0),
+    [form.appendix2_fulltime_local_total]
+  );
+  const appendix2Remaining = useMemo(() => appendix2LocalTotal - appendix2DutySum, [appendix2LocalTotal, appendix2DutySum]);
+  const appendix2OverLimit = useMemo(
+    () => /^\d+$/.test(String(form.appendix2_fulltime_local_total || '').trim()) && appendix2DutySum > appendix2LocalTotal,
+    [form.appendix2_fulltime_local_total, appendix2DutySum, appendix2LocalTotal]
+  );
+  const maxSelectableNewJobs = commonJobOptions.length;
+  const canAddMoreNewJobs = commonJobNewRequests.length < maxSelectableNewJobs;
 
   const visibleRecords = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -338,11 +455,60 @@ const QuotaApplications: React.FC = () => {
         String(row.post_name || '').trim() &&
         /^\d+$/.test(String(row.employment_months || '').trim()) &&
         /^\d+$/.test(String(row.apply_count_new || '').trim()) &&
-        /^\d+$/.test(String(row.apply_count_renewal || '').trim())
+        (form.category === '新申請' || /^\d+$/.test(String(row.apply_count_renewal || '').trim()))
       );
     map['common-jobs'] = commonJobsOk;
+    map['new-jobs'] =
+      commonJobNewRequests.length > 0 &&
+      commonJobNewRequests.every((row) => Object.keys(validateCommonJobNewRequest(row, 'final')).length === 0);
+    const renewRequired = form.category !== '新申請';
+    if (!renewRequired) {
+      map['renew-jobs'] = true;
+    } else {
+      const adjustments = Array.isArray(form.renew_job_adjustments) ? form.renew_job_adjustments : [];
+      const renewBasicOk =
+        String(form.renew_old_file_no || '').trim() &&
+        String(form.renew_quota_serial_no || '').trim();
+      const renewAdjustmentsOk =
+        adjustments.length > 0 &&
+        adjustments.every((row) => {
+          const weeklyOk = /^\d+$/.test(String(row.weekly_working_days || '').trim());
+          const shiftOk = row.shift_required === 'NO' || row.shift_required === 'YES';
+          const schedules = Array.isArray(row.schedules) ? row.schedules : [];
+          const scheduleCountOk =
+            row.shift_required === 'YES'
+              ? schedules.length >= 1 && schedules.length <= 5
+              : schedules.length === 1;
+          const scheduleValueOk = schedules.every((slot) => validateScheduleSlot(slot).valid);
+          const addresses = Array.isArray(row.work_addresses) ? row.work_addresses : [];
+          const addressCountOk = addresses.length >= 1 && addresses.length <= 3;
+          const addressValueOk = addresses.some((x) => String(x || '').trim());
+          return weeklyOk && shiftOk && scheduleCountOk && scheduleValueOk && addressCountOk && addressValueOk;
+        });
+      map['renew-jobs'] = Boolean(renewBasicOk && renewAdjustmentsOk);
+    }
+    const dateRaw = String(form.appendix2_latest_cutoff_date || '').trim();
+    const dateMatch = dateRaw.match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
+    let dateOk = false;
+    if (dateMatch) {
+      const y = Number(dateMatch[1]);
+      const m = Number(dateMatch[2]);
+      const d = Number(dateMatch[3]);
+      const dt = new Date(y, m - 1, d);
+      dateOk = dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d;
+    }
+    const localTotalOk = /^\d+$/.test(String(form.appendix2_fulltime_local_total || '').trim());
+    const namedJobs = appendix2NamedJobs;
+    const sameDutyOk =
+      namedJobs.length > 0 &&
+      namedJobs.every((j) => /^\d+$/.test(String(form.appendix2_same_duty_local_counts?.[j.id] || '').trim()));
+    const totalConstraintOk =
+      localTotalOk &&
+      sameDutyOk &&
+      appendix2DutySum <= Number(String(form.appendix2_fulltime_local_total || '').trim() || 0);
+    map['appendix-2'] = dateOk && localTotalOk && sameDutyOk && totalConstraintOk;
     return map;
-  }, [sectionDone, applicantErrors, form.common_jobs]);
+  }, [sectionDone, applicantErrors, form.common_jobs, commonJobNewRequests, form.category, form.renew_job_adjustments, form.renew_old_file_no, form.renew_quota_serial_no, form.appendix2_latest_cutoff_date, form.appendix2_fulltime_local_total, form.appendix2_same_duty_local_counts, appendix2NamedJobs, appendix2DutySum]);
 
   const allSectionsCompleted = useMemo(
     () => visibleSections.every((s) => Boolean(computedSectionDone[s.key])),
@@ -356,7 +522,456 @@ const QuotaApplications: React.FC = () => {
     if (section === 'common-jobs') {
       return `職位筆數=${form.common_jobs.length}`;
     }
+    if (section === 'renew-jobs') {
+      return `舊檔案編號=${form.renew_old_file_no || '-'}，續約職位調整=${form.renew_job_adjustments.length} 筆`;
+    }
+    if (section === 'appendix-2') {
+      const namedJobs = form.common_jobs.filter((j) => String(j.post_name || '').trim());
+      return `截止日期=${form.appendix2_latest_cutoff_date || '-'}，本地僱員=${form.appendix2_fulltime_local_total || '-'}，職位=${namedJobs.length} 項`;
+    }
     return `${SECTION_LABELS.find((x) => x.key === section)?.label || section}已有內容`;
+  };
+
+  const updateActiveNewJobRequest = (updater: (prev: CommonJobNewRequest) => CommonJobNewRequest) => {
+    setForm((prev) => {
+      const list = Array.isArray(prev.common_job_new_requests) ? [...prev.common_job_new_requests] : [];
+      const target = list[activeNewJobIndex] || emptyCommonJobNewRequest();
+      list[activeNewJobIndex] = updater(target);
+      return {
+        ...prev,
+        common_job_new_requests: list,
+      };
+    });
+  };
+
+  function getNewJobCardKey(_row: CommonJobNewRequest | null | undefined, idx: number) {
+    return `idx-${idx}`;
+  }
+
+  const renderActiveNewJobEditor = () => {
+    if (!activeNewJobRequest) return null;
+    return (
+      <>
+        <div className="border border-gray-200 rounded-apple-sm p-4 bg-white/40">
+          <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">職位選擇 *</label>
+          <div className="relative">
+            <input
+              type="text"
+              value={selectedJobOption ? selectedJobOption.label : jobSelectorQuery}
+              onChange={(e) => {
+                setJobSelectorQuery(e.target.value);
+                setJobSelectorOpen(true);
+                updateActiveNewJobRequest((prev) => ({
+                  ...prev,
+                  selected_common_job_id: '',
+                }));
+              }}
+              onFocus={() => {
+                if (jobSelectorBlurTimer.current) window.clearTimeout(jobSelectorBlurTimer.current);
+                setJobSelectorOpen(true);
+              }}
+              onBlur={() => {
+                jobSelectorBlurTimer.current = window.setTimeout(() => setJobSelectorOpen(false), 150);
+              }}
+              placeholder={commonJobOptions.length === 0 ? '請先在「申請常見職位」新增職位' : '搜尋職位編碼或名稱'}
+              className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+              aria-required="true"
+              aria-invalid={Boolean(newJobErrors.selected_common_job_id)}
+            />
+            {jobSelectorOpen && (
+              <div className="absolute z-20 mt-2 w-full bg-white border border-gray-200 rounded-apple-sm shadow-lg overflow-hidden max-h-72 overflow-y-auto">
+                {filteredJobOptions.length === 0 ? (
+                  <div className="px-4 py-3 text-sm text-gray-500">沒有可選職位，請先新增常見職位</div>
+                ) : (
+                  filteredJobOptions
+                    .filter((opt) => {
+                      const duplicate = commonJobNewRequests.some(
+                        (row, idx) => idx !== activeNewJobIndex && row.selected_common_job_id === opt.id
+                      );
+                      return !duplicate;
+                    })
+                    .map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onMouseDown={(evt) => evt.preventDefault()}
+                        onClick={() => {
+                          updateActiveNewJobRequest((prev) => emptyCommonJobNewRequest(opt.id));
+                          setJobSelectorQuery(opt.label);
+                          setJobSelectorOpen(false);
+                          setCollapsedNewJobKeys((prev) => prev.filter((x) => x !== getNewJobCardKey(activeNewJobRequest, activeNewJobIndex)));
+                          setSubmitAttempted(false);
+                        }}
+                        className="w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors"
+                      >
+                        <div className="text-sm font-medium text-gray-900">{opt.post_name || '未命名職位'}</div>
+                        <div className="text-xs text-gray-500 mt-0.5">{opt.post_code || '-'}</div>
+                      </button>
+                    ))
+                )}
+              </div>
+            )}
+          </div>
+          {newJobErrors.selected_common_job_id && (
+            <p className="text-xs text-red-600 mt-1 ml-1">{newJobErrors.selected_common_job_id}</p>
+          )}
+        </div>
+
+        <fieldset
+          className="border border-gray-200 rounded-apple-sm p-4 bg-white/40 space-y-4"
+          disabled={!activeNewJobRequest.selected_common_job_id}
+        >
+          <legend className="px-1 text-sm font-semibold text-gray-800">工作時間設定</legend>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">輪班需求 *</label>
+            <div className="flex items-center gap-6">
+              <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="radio"
+                  name="shift_required"
+                  checked={activeNewJobRequest.shift_required === 'NO'}
+                  onChange={() =>
+                    updateActiveNewJobRequest((prev) => ({
+                      ...prev,
+                      shift_required: 'NO',
+                      schedules: prev.schedules.slice(0, 1),
+                    }))
+                  }
+                />
+                不需要輪班
+              </label>
+              <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="radio"
+                  name="shift_required"
+                  checked={activeNewJobRequest.shift_required === 'YES'}
+                  onChange={() =>
+                    updateActiveNewJobRequest((prev) => ({
+                      ...prev,
+                      shift_required: 'YES',
+                      schedules: prev.schedules.length > 0 ? prev.schedules : [{ start: '', end: '' }],
+                    }))
+                  }
+                />
+                需輪班
+              </label>
+            </div>
+            {newJobErrors.shift_required && (
+              <p className="text-xs text-red-600 mt-1 ml-1">{newJobErrors.shift_required}</p>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <div className="text-sm font-medium text-gray-700">每日工作時間區間（HH:mm）</div>
+            {activeNewJobRequest.schedules.map((slot: WorkScheduleSlot, idx: number) => (
+              <div key={`slot-${idx}`} className="flex items-center gap-2">
+                <input
+                  type="time"
+                  value={slot.start}
+                  onChange={(e) =>
+                    updateActiveNewJobRequest((prev) => ({
+                      ...prev,
+                      schedules: prev.schedules.map((x, i) => (i === idx ? { ...x, start: e.target.value } : x)),
+                    }))
+                  }
+                  className="px-3 py-2 border border-gray-200 rounded-apple-sm bg-white text-sm"
+                />
+                <span className="text-gray-500">至</span>
+                <input
+                  type="time"
+                  value={slot.end}
+                  onChange={(e) =>
+                    updateActiveNewJobRequest((prev) => ({
+                      ...prev,
+                      schedules: prev.schedules.map((x, i) => (i === idx ? { ...x, end: e.target.value } : x)),
+                    }))
+                  }
+                  className="px-3 py-2 border border-gray-200 rounded-apple-sm bg-white text-sm"
+                />
+                {activeNewJobRequest.shift_required === 'YES' && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateActiveNewJobRequest((prev) => ({
+                        ...prev,
+                        schedules: prev.schedules.filter((_, i) => i !== idx),
+                      }))
+                    }
+                    className="text-red-500 hover:text-red-700 text-xs px-2 py-1"
+                    disabled={activeNewJobRequest.schedules.length <= 1}
+                  >
+                    刪除
+                  </button>
+                )}
+                {validateScheduleSlot(slot).crossDay && (
+                  <span className="text-amber-600 text-xs">跨日班次</span>
+                )}
+              </div>
+            ))}
+            {activeNewJobRequest.shift_required === 'YES' && (
+              <button
+                type="button"
+                onClick={() =>
+                  updateActiveNewJobRequest((prev) => ({
+                    ...prev,
+                    schedules: prev.schedules.length >= 5 ? prev.schedules : [...prev.schedules, { start: '', end: '' }],
+                  }))
+                }
+                className="px-3 py-1.5 text-xs rounded border border-gray-200 hover:bg-gray-50"
+                disabled={activeNewJobRequest.schedules.length >= 5}
+              >
+                新增時段（最多5組）
+              </button>
+            )}
+            {hasCrossDayShift && (
+              <p className="text-xs text-amber-600">系統已判定存在跨日班次，請確認班次安排。</p>
+            )}
+            {newJobErrors.schedules && <p className="text-xs text-red-600">{newJobErrors.schedules}</p>}
+          </div>
+
+          <div className="space-y-2">
+            <div className="text-sm font-medium text-gray-700">工作地址（最多 3 項）</div>
+            {(Array.isArray(activeNewJobRequest.work_addresses) ? activeNewJobRequest.work_addresses : ['']).map((addr, idx) => (
+              <div key={`addr-${idx}`} className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={addr}
+                  onChange={(e) =>
+                    updateActiveNewJobRequest((prev) => {
+                      const list = Array.isArray(prev.work_addresses) ? [...prev.work_addresses] : [''];
+                      list[idx] = e.target.value;
+                      return { ...prev, work_addresses: list };
+                    })
+                  }
+                  placeholder={`工作地址 ${idx + 1}`}
+                  className="flex-1 px-3 py-2 border border-gray-200 rounded-apple-sm bg-white text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() =>
+                    updateActiveNewJobRequest((prev) => {
+                      const list = Array.isArray(prev.work_addresses) ? prev.work_addresses : [''];
+                      const next = list.filter((_, i) => i !== idx);
+                      return { ...prev, work_addresses: next.length ? next : [''] };
+                    })
+                  }
+                  className="text-red-500 hover:text-red-700 text-xs px-2 py-1"
+                  disabled={(Array.isArray(activeNewJobRequest.work_addresses) ? activeNewJobRequest.work_addresses : ['']).length <= 1}
+                >
+                  刪除
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() =>
+                updateActiveNewJobRequest((prev) => {
+                  const list = Array.isArray(prev.work_addresses) ? prev.work_addresses : [''];
+                  return list.length >= 3 ? prev : { ...prev, work_addresses: [...list, ''] };
+                })
+              }
+              className="px-3 py-1.5 text-xs rounded border border-gray-200 hover:bg-gray-50"
+              disabled={(Array.isArray(activeNewJobRequest.work_addresses) ? activeNewJobRequest.work_addresses : ['']).length >= 3}
+            >
+              新增地址
+            </button>
+            {newJobErrors.work_addresses && <p className="text-xs text-red-600">{newJobErrors.work_addresses}</p>}
+          </div>
+        </fieldset>
+
+        <fieldset
+          className="border border-gray-200 rounded-apple-sm p-4 bg-white/40 space-y-4"
+          disabled={!activeNewJobRequest.selected_common_job_id}
+        >
+          <legend className="px-1 text-sm font-semibold text-gray-800">語文與技能要求</legend>
+
+          <div>
+            <div className="space-y-4">
+              <div>
+                <div className="text-xs font-semibold text-gray-600 mb-2">會話</div>
+                <div className="overflow-x-auto border border-gray-200 rounded-apple-sm">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-3 py-2 text-left text-gray-600">語言</th>
+                        <th className="px-3 py-2 text-left text-gray-600">無需</th>
+                        <th className="px-3 py-2 text-left text-gray-600">略懂</th>
+                        <th className="px-3 py-2 text-left text-gray-600">一般</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[
+                        { key: 'cantonese', label: '粵語' },
+                        { key: 'english', label: '英語' },
+                        { key: 'other', label: '其他語言' },
+                      ].map((lang) => (
+                        <tr key={`spoken-${lang.key}`} className="border-t border-gray-100">
+                          <td className="px-3 py-2 text-gray-700">
+                            {lang.key === 'other' ? (
+                              <input
+                                type="text"
+                                value={activeNewJobRequest.language_requirement.other_language_name}
+                                onChange={(e) =>
+                                  updateActiveNewJobRequest((prev) => ({
+                                    ...prev,
+                                    language_requirement: {
+                                      ...prev.language_requirement,
+                                      other_language_name: e.target.value,
+                                    },
+                                  }))
+                                }
+                                placeholder="其他語言（例如：普通話）"
+                                className="w-full min-w-[180px] px-2 py-1 border border-gray-200 rounded"
+                              />
+                            ) : (
+                              lang.label
+                            )}
+                          </td>
+                          {[
+                            { value: 'NONE', label: '無需' },
+                            { value: 'LITTLE', label: '略懂' },
+                            { value: 'FAIR', label: '一般' },
+                          ].map((lv) => (
+                            <td key={`${lang.key}-${lv.value}`} className="px-3 py-2">
+                              <label className="inline-flex items-center gap-1 text-xs text-gray-600">
+                                <input
+                                  type="radio"
+                                  name={`spoken-${lang.key}`}
+                                  checked={(activeNewJobRequest.language_requirement.spoken as any)[lang.key] === lv.value}
+                                  onChange={() =>
+                                    updateActiveNewJobRequest((prev) => ({
+                                      ...prev,
+                                      language_requirement: {
+                                        ...prev.language_requirement,
+                                        spoken: {
+                                          ...prev.language_requirement.spoken,
+                                          [lang.key]: lv.value as any,
+                                        },
+                                      },
+                                    }))
+                                  }
+                                />
+                                {lv.label}
+                              </label>
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {newJobErrors.spoken_requirement && (
+                  <p className="text-xs text-red-600 mt-1">{newJobErrors.spoken_requirement}</p>
+                )}
+              </div>
+
+              <div>
+                <div className="text-xs font-semibold text-gray-600 mb-2">讀寫</div>
+                <div className="overflow-x-auto border border-gray-200 rounded-apple-sm">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-3 py-2 text-left text-gray-600">語言</th>
+                        <th className="px-3 py-2 text-left text-gray-600">無需</th>
+                        <th className="px-3 py-2 text-left text-gray-600">略懂</th>
+                        <th className="px-3 py-2 text-left text-gray-600">一般</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[
+                        { key: 'cantonese', label: '粵語' },
+                        { key: 'english', label: '英語' },
+                        { key: 'other', label: '其他語言' },
+                      ].map((lang) => (
+                        <tr key={`written-${lang.key}`} className="border-t border-gray-100">
+                          <td className="px-3 py-2 text-gray-700">
+                            {lang.key === 'other' ? (
+                              <input
+                                type="text"
+                                value={activeNewJobRequest.language_requirement.other_language_name}
+                                onChange={(e) =>
+                                  updateActiveNewJobRequest((prev) => ({
+                                    ...prev,
+                                    language_requirement: {
+                                      ...prev.language_requirement,
+                                      other_language_name: e.target.value,
+                                    },
+                                  }))
+                                }
+                                placeholder="其他語言（例如：普通話）"
+                                className="w-full min-w-[180px] px-2 py-1 border border-gray-200 rounded"
+                              />
+                            ) : (
+                              lang.label
+                            )}
+                          </td>
+                          {[
+                            { value: 'NONE', label: '無需' },
+                            { value: 'LITTLE', label: '略懂' },
+                            { value: 'FAIR', label: '一般' },
+                          ].map((lv) => (
+                            <td key={`${lang.key}-${lv.value}`} className="px-3 py-2">
+                              <label className="inline-flex items-center gap-1 text-xs text-gray-600">
+                                <input
+                                  type="radio"
+                                  name={`written-${lang.key}`}
+                                  checked={(activeNewJobRequest.language_requirement.written as any)[lang.key] === lv.value}
+                                  onChange={() =>
+                                    updateActiveNewJobRequest((prev) => ({
+                                      ...prev,
+                                      language_requirement: {
+                                        ...prev.language_requirement,
+                                        written: {
+                                          ...prev.language_requirement.written,
+                                          [lang.key]: lv.value as any,
+                                        },
+                                      },
+                                    }))
+                                  }
+                                />
+                                {lv.label}
+                              </label>
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {newJobErrors.written_requirement && (
+                  <p className="text-xs text-red-600 mt-1">{newJobErrors.written_requirement}</p>
+                )}
+              </div>
+            </div>
+            {(newJobErrors.language_requirement || newJobErrors.other_language) && (
+              <p className="text-xs text-red-600 mt-1">{newJobErrors.language_requirement || newJobErrors.other_language}</p>
+            )}
+          </div>
+
+          <div>
+            <div className="text-sm font-medium text-gray-700 mb-2">技能與其他要求</div>
+            <div
+              contentEditable
+              suppressContentEditableWarning
+              onInput={(e) =>
+                updateActiveNewJobRequest((prev) => ({
+                  ...prev,
+                  skill_requirement_html: sanitizeBasicRtfHtml((e.target as HTMLDivElement).innerHTML || ''),
+                }))
+              }
+              dangerouslySetInnerHTML={{ __html: activeNewJobRequest.skill_requirement_html || '' }}
+              className="min-h-[120px] w-full px-3 py-2 border border-gray-200 rounded-apple-sm bg-white text-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/30"
+              role="textbox"
+              aria-label="技能與其他要求"
+            />
+            <div className="mt-1 text-xs text-gray-500">字數：{skillTextLength}/500</div>
+            {newJobErrors.skill_requirement_html && (
+              <p className="text-xs text-red-600 mt-1">{newJobErrors.skill_requirement_html}</p>
+            )}
+          </div>
+        </fieldset>
+      </>
+    );
   };
 
   const handleOpenCreate = () => {
@@ -364,6 +979,11 @@ const QuotaApplications: React.FC = () => {
     setSelectedId(null);
     setEmployerQuery('');
     setEmployerDropdownOpen(false);
+    setJobSelectorQuery('');
+    setJobSelectorOpen(false);
+    setActiveNewJobIndex(0);
+    setCollapsedNewJobKeys([]);
+    setSubmitAttempted(false);
     // New application should start from a clean form.
     // Per-record continuation is handled via list -> edit flow.
     clearDraftByKey(getDraftStorageKey(null));
@@ -379,6 +999,11 @@ const QuotaApplications: React.FC = () => {
     setSelectedId(row.id);
     setEmployerQuery(String(row.employer_name_cn || row.employer_name_en || '').trim());
     setEmployerDropdownOpen(false);
+    setJobSelectorQuery('');
+    setJobSelectorOpen(false);
+    setActiveNewJobIndex(0);
+    setCollapsedNewJobKeys([]);
+    setSubmitAttempted(false);
     const baseForm: QuotaApplicationForm = {
       application_no: row.application_no,
       submitted_at: row.submitted_at,
@@ -397,6 +1022,36 @@ const QuotaApplications: React.FC = () => {
       contact_name: row.contact_name,
       contact_phone_local: row.contact_phone_local,
       contact_email: row.contact_email,
+      renew_old_file_no: String((row as any).renew_old_file_no || ''),
+      renew_quota_serial_no: String((row as any).renew_quota_serial_no || ''),
+      renew_job_adjustments: Array.isArray((row as any).renew_job_adjustments)
+        ? (row as any).renew_job_adjustments.map((x: any, idx: number) => ({
+            id: String(x?.id || `renew-${Date.now()}-${idx}`),
+            weekly_working_days: String(x?.weekly_working_days || ''),
+            shift_required: x?.shift_required === 'YES' || x?.shift_required === 'NO' ? x.shift_required : '',
+            schedules: Array.isArray(x?.schedules)
+              ? x.schedules.map((s: any) => ({
+                  start: String(s?.start || ''),
+                  end: String(s?.end || ''),
+                }))
+              : [{ start: '', end: '' }],
+            work_addresses: Array.isArray(x?.work_addresses)
+              ? x.work_addresses.map((addr: any) => String(addr || ''))
+              : [''],
+          }))
+        : [emptyRenewJobAdjustment()],
+      appendix2_latest_cutoff_date: String((row as any).appendix2_latest_cutoff_date || ''),
+      appendix2_fulltime_local_total: String((row as any).appendix2_fulltime_local_total || ''),
+      appendix2_same_duty_local_counts:
+        (row as any).appendix2_same_duty_local_counts &&
+        typeof (row as any).appendix2_same_duty_local_counts === 'object'
+          ? Object.fromEntries(
+              Object.entries((row as any).appendix2_same_duty_local_counts).map(([k, v]) => [
+                String(k),
+                String(v || ''),
+              ])
+            )
+          : {},
       common_jobs: Array.isArray((row as any).common_jobs)
         ? (row as any).common_jobs.map((j: any, idx: number) => ({
             id: String(j?.id || `job-${Date.now()}-${idx}`),
@@ -407,10 +1062,28 @@ const QuotaApplications: React.FC = () => {
             apply_count_renewal: String(j?.apply_count_renewal || ''),
           }))
         : [],
+      common_job_new_requests: Array.isArray((row as any).common_job_new_requests)
+        ? (row as any).common_job_new_requests
+        : (row as any).common_job_new_request
+        ? [(row as any).common_job_new_request]
+        : [],
     };
     const draftKey = getDraftStorageKey(row.id);
     const draft = readDraftMap()[draftKey];
-    setForm(draft?.form || baseForm);
+    const sourceFormRaw = (draft?.form || baseForm) as Partial<QuotaApplicationForm>;
+    const sourceForm: QuotaApplicationForm = {
+      ...baseForm,
+      ...sourceFormRaw,
+      renew_job_adjustments: Array.isArray(sourceFormRaw?.renew_job_adjustments)
+        ? sourceFormRaw.renew_job_adjustments
+        : baseForm.renew_job_adjustments,
+      common_job_new_requests: Array.isArray(sourceFormRaw?.common_job_new_requests)
+        ? sourceFormRaw.common_job_new_requests
+        : baseForm.common_job_new_requests,
+    };
+    setForm(sourceForm);
+    const reqList = Array.isArray(sourceForm.common_job_new_requests) ? sourceForm.common_job_new_requests : [];
+    setCollapsedNewJobKeys(reqList.map((req, idx) => getNewJobCardKey(req, idx)));
     setSectionDone(draft?.section_done || row.section_done || {});
     setActiveSection(draft?.last_active_section || 'applicant');
     setModalNotice(null);
@@ -500,13 +1173,46 @@ const QuotaApplications: React.FC = () => {
   };
 
   const saveRecord = async (mode: 'draft' | 'final') => {
+    const newReqErrorsListForSave = commonJobNewRequests.map((row) =>
+      validateCommonJobNewRequest(row, mode === 'draft' ? 'draft' : 'final')
+    );
+    const firstNewReqError = newReqErrorsListForSave
+      .map((row) => Object.values(row).find(Boolean))
+      .find(Boolean);
     if (mode === 'final') {
+      setSubmitAttempted(true);
       if (applicantErrors.length > 0) {
         return alert(applicantErrors[0]);
+      }
+      if (commonJobNewRequests.length === 0) {
+        return alert('請先新增至少一個「新申請」項目');
+      }
+      if (firstNewReqError) {
+        return alert(firstNewReqError || '請先修正「新申請」欄位錯誤');
       }
       if (!allSectionsCompleted) {
         const pending = visibleSections.find((s) => !computedSectionDone[s.key]);
         return alert(`請先完成所有板塊再建立申請。尚未完成：${pending?.label || '未命名板塊'}`);
+      }
+      try {
+        const resp = await fetch('/api/ai/quota-common-jobs-submit', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            common_jobs: form.common_jobs,
+            common_job_new_requests: commonJobNewRequests.map((row) => ({
+              ...row,
+              skill_requirement_html: sanitizeBasicRtfHtml(row.skill_requirement_html),
+            })),
+          }),
+        });
+        const payload = await resp.json().catch(() => ({}));
+        if (!resp.ok || payload?.ok === false) {
+          const msg = String(payload?.errors?.[0]?.message || payload?.error || '提交驗證失敗');
+          return alert(msg);
+        }
+      } catch (err: any) {
+        return alert(String(err?.message || '提交驗證失敗'));
       }
     }
 
@@ -566,6 +1272,13 @@ const QuotaApplications: React.FC = () => {
     const draftKey = getDraftStorageKey(currentId);
 
     if (mode === 'draft') {
+      const firstDraftRequiredError = newReqErrorsListForSave
+        .map((x) => x.selected_common_job_id || x.shift_required)
+        .find(Boolean);
+      if (firstDraftRequiredError) {
+        showNotice('warning', firstDraftRequiredError || '請先完成必填欄位');
+        return;
+      }
       setSavingDraft(true);
       try {
         const map = readDraftMap();
@@ -793,7 +1506,21 @@ const QuotaApplications: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">申請類別 *</label>
-              <select value={form.category} onChange={(e) => setForm((prev) => ({ ...prev, category: e.target.value as QuotaApplicationCategory }))} className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm">
+              <select
+                value={form.category}
+                onChange={(e) => {
+                  const nextCategory = e.target.value as QuotaApplicationCategory;
+                  setForm((prev) => ({
+                    ...prev,
+                    category: nextCategory,
+                    common_jobs:
+                      nextCategory === '新申請'
+                        ? prev.common_jobs.map((x) => ({ ...x, apply_count_renewal: '' }))
+                        : prev.common_jobs,
+                  }));
+                }}
+                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+              >
                 {CATEGORY_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
               </select>
             </div>
@@ -1041,7 +1768,13 @@ const QuotaApplications: React.FC = () => {
                                 ),
                               }))
                             }
-                            className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                            disabled={form.category === '新申請'}
+                            className={[
+                              "w-full px-4 py-2 border rounded-apple-sm",
+                              form.category === '新申請'
+                                ? "bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed"
+                                : "bg-white border border-gray-200",
+                            ].join(' ')}
                           />
                         </div>
                       </div>
@@ -1049,6 +1782,534 @@ const QuotaApplications: React.FC = () => {
                   ))}
                 </div>
               )}
+            </div>
+          ) : activeSection === 'new-jobs' ? (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="text-sm text-gray-600">
+                  已新增職位申請：{commonJobNewRequests.length} 項
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!canAddMoreNewJobs) return;
+                    setForm((prev) => ({
+                      ...prev,
+                      common_job_new_requests: [...commonJobNewRequests, emptyCommonJobNewRequest()],
+                    }));
+                    setActiveNewJobIndex(commonJobNewRequests.length);
+                    setJobSelectorQuery('');
+                    setJobSelectorOpen(false);
+                    setSubmitAttempted(false);
+                  }}
+                  disabled={!canAddMoreNewJobs}
+                  className={[
+                    "inline-flex items-center gap-2 px-3 py-1.5 text-sm rounded border transition-colors",
+                    canAddMoreNewJobs
+                      ? "border-gray-200 hover:bg-gray-50 text-gray-700"
+                      : "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed",
+                  ].join(' ')}
+                >
+                  <Plus className="w-4 h-4" />
+                  {canAddMoreNewJobs ? '選擇職位' : '職位已選滿'}
+                </button>
+              </div>
+
+              {commonJobNewRequests.length === 0 ? (
+                <div className="border border-dashed border-gray-300 rounded-apple-sm p-6 text-sm text-gray-500 text-center">
+                  請先點擊「選擇職位」新增一個職位項目，然後逐項填寫。
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {commonJobNewRequests.map((row, idx) => {
+                    const cardKey = getNewJobCardKey(row, idx);
+                    const isActive = idx === activeNewJobIndex;
+                    const collapsed = collapsedNewJobKeys.includes(cardKey);
+                    const option = commonJobOptions.find((opt) => opt.id === row.selected_common_job_id);
+                    const errors = newJobErrorsList[idx] || {};
+                    const isDone = row.selected_common_job_id && Object.keys(validateCommonJobNewRequest(row, 'final')).length === 0;
+                    const shiftSummary =
+                      row.shift_required === 'YES' ? '需輪班' : row.shift_required === 'NO' ? '不需輪班' : '未選';
+                    const scheduleSummary = (row.schedules || [])
+                      .map((slot) => {
+                        const s = String(slot?.start || '').trim();
+                        const e = String(slot?.end || '').trim();
+                        return s && e ? `${s}-${e}` : '';
+                      })
+                      .filter(Boolean)
+                      .join('；');
+                    return (
+                      <div key={cardKey} className="space-y-2">
+                        <div
+                          onClick={() => {
+                            setActiveNewJobIndex(idx);
+                          }}
+                          onDoubleClick={() => {
+                            setActiveNewJobIndex(idx);
+                            setCollapsedNewJobKeys((prev) =>
+                              prev.includes(cardKey) ? prev.filter((x) => x !== cardKey) : [...prev, cardKey]
+                            );
+                          }}
+                          className={clsx(
+                            "border rounded-apple-sm bg-white/60 cursor-pointer",
+                            isActive ? "border-apple-blue ring-1 ring-apple-blue/30" : "border-gray-200"
+                          )}
+                        >
+                          <div className="px-3 py-2 flex items-center justify-between">
+                            <div className="text-sm">
+                              <span className={clsx("font-medium", isActive ? "text-apple-blue" : "text-gray-900")}>職位 {idx + 1}</span>
+                              <span className="ml-2 text-gray-600">{option?.label || '未選擇職位'}</span>
+                              <span className={`ml-2 text-xs ${isDone ? 'text-emerald-600' : 'text-amber-600'}`}>
+                                {isDone ? '已完成' : '待填寫'}
+                              </span>
+                              {isActive && <span className="ml-2 text-xs text-apple-blue">當前編輯</span>}
+                              {!isDone && submitAttempted && Object.keys(errors).length > 0 && (
+                                <span className="ml-2 text-xs text-red-600">有未完成欄位</span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveNewJobIndex(idx);
+                                  setCollapsedNewJobKeys((prev) => prev.filter((x) => x !== cardKey));
+                                }}
+                                className="px-2 py-1 text-xs border border-gray-200 rounded hover:bg-gray-50"
+                              >
+                                編輯
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const willCollapse = !collapsed;
+                                  if (willCollapse) {
+                                    setCollapsedNewJobKeys((prev) => (prev.includes(cardKey) ? prev : [...prev, cardKey]));
+                                  } else {
+                                    setActiveNewJobIndex(idx);
+                                    setCollapsedNewJobKeys((prev) => prev.filter((x) => x !== cardKey));
+                                  }
+                                }}
+                                className="px-2 py-1 text-xs border border-gray-200 rounded hover:bg-gray-50"
+                              >
+                                {collapsed ? '展開' : '縮略'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setForm((prev) => ({
+                                    ...prev,
+                                    common_job_new_requests: prev.common_job_new_requests.filter((_, i) => i !== idx),
+                                  }));
+                                  setCollapsedNewJobKeys((prev) => prev.filter((x) => x !== cardKey));
+                                  setActiveNewJobIndex((prev) => (prev > idx ? prev - 1 : Math.max(0, prev === idx ? idx - 1 : prev)));
+                                }}
+                                className="px-2 py-1 text-xs text-red-600 border border-red-200 rounded hover:bg-red-50"
+                              >
+                                刪除
+                              </button>
+                            </div>
+                          </div>
+                          <div className="px-3 pb-2 text-xs text-gray-500">
+                            輪班：{shiftSummary}；
+                            時段：{scheduleSummary || '未填寫'}
+                          </div>
+                        </div>
+                        {isActive && !collapsed && <div className="space-y-2">{renderActiveNewJobEditor()}</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ) : activeSection === 'renew-jobs' ? (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">舊檔案編號 *</label>
+                  <input
+                    type="text"
+                    value={form.renew_old_file_no}
+                    onChange={(e) => setForm((prev) => ({ ...prev, renew_old_file_no: e.target.value }))}
+                    className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                    placeholder="請輸入舊檔案編號"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">是次續約配額序號 *</label>
+                  <input
+                    type="text"
+                    value={form.renew_quota_serial_no}
+                    onChange={(e) => setForm((prev) => ({ ...prev, renew_quota_serial_no: e.target.value }))}
+                    className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                    placeholder="請輸入是次續約配額序號"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-semibold text-gray-800">續約調整職位詳情</div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setForm((prev) => ({
+                      ...prev,
+                      renew_job_adjustments: [
+                        ...(Array.isArray(prev.renew_job_adjustments) ? prev.renew_job_adjustments : [emptyRenewJobAdjustment()]),
+                        emptyRenewJobAdjustment(),
+                      ],
+                    }))
+                  }
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-apple-blue text-white rounded-apple-sm text-sm hover:bg-blue-600 transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  新增調整職位
+                </button>
+              </div>
+
+              {(Array.isArray(form.renew_job_adjustments) ? form.renew_job_adjustments : []).map((item, idx) => (
+                <div key={item.id} className="border border-gray-200 rounded-apple-sm p-4 bg-white/40 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm font-semibold text-gray-800">調整職位 {idx + 1}</div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setForm((prev) => ({
+                          ...prev,
+                          renew_job_adjustments:
+                            prev.renew_job_adjustments.length <= 1
+                              ? prev.renew_job_adjustments
+                              : prev.renew_job_adjustments.filter((x) => x.id !== item.id),
+                        }))
+                      }
+                      className="text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 p-2 rounded-full transition-colors disabled:opacity-50"
+                      disabled={form.renew_job_adjustments.length <= 1}
+                      title="刪除調整職位"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">每週工作日數 *</label>
+                    <input
+                      type="text"
+                      value={item.weekly_working_days}
+                      onChange={(e) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          renew_job_adjustments: prev.renew_job_adjustments.map((x) =>
+                            x.id === item.id
+                              ? { ...x, weekly_working_days: e.target.value.replace(/[^\d]/g, '').slice(0, 2) }
+                              : x
+                          ),
+                        }))
+                      }
+                      className="w-full md:w-60 px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                      placeholder="例如：6"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">每天固定/輪班時間 *</label>
+                    <div className="flex items-center gap-6 mb-3">
+                      <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+                        <input
+                          type="radio"
+                          name={`renew-shift-${item.id}`}
+                          checked={item.shift_required === 'NO'}
+                          onChange={() =>
+                            setForm((prev) => ({
+                              ...prev,
+                              renew_job_adjustments: prev.renew_job_adjustments.map((x) =>
+                                x.id === item.id
+                                  ? { ...x, shift_required: 'NO', schedules: x.schedules.slice(0, 1) }
+                                  : x
+                              ),
+                            }))
+                          }
+                        />
+                        固定時間
+                      </label>
+                      <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+                        <input
+                          type="radio"
+                          name={`renew-shift-${item.id}`}
+                          checked={item.shift_required === 'YES'}
+                          onChange={() =>
+                            setForm((prev) => ({
+                              ...prev,
+                              renew_job_adjustments: prev.renew_job_adjustments.map((x) =>
+                                x.id === item.id
+                                  ? { ...x, shift_required: 'YES', schedules: x.schedules.length ? x.schedules : [{ start: '', end: '' }] }
+                                  : x
+                              ),
+                            }))
+                          }
+                        />
+                        輪班時間
+                      </label>
+                    </div>
+
+                    <div className="space-y-2">
+                      {item.schedules.map((slot, sIdx) => (
+                        <div key={`${item.id}-slot-${sIdx}`} className="flex items-center gap-2">
+                          <input
+                            type="time"
+                            value={slot.start}
+                            onChange={(e) =>
+                              setForm((prev) => ({
+                                ...prev,
+                                renew_job_adjustments: prev.renew_job_adjustments.map((x) =>
+                                  x.id === item.id
+                                    ? {
+                                        ...x,
+                                        schedules: x.schedules.map((s, i) =>
+                                          i === sIdx ? { ...s, start: e.target.value } : s
+                                        ),
+                                      }
+                                    : x
+                                ),
+                              }))
+                            }
+                            className="px-3 py-2 border border-gray-200 rounded-apple-sm bg-white text-sm"
+                          />
+                          <span className="text-gray-500">至</span>
+                          <input
+                            type="time"
+                            value={slot.end}
+                            onChange={(e) =>
+                              setForm((prev) => ({
+                                ...prev,
+                                renew_job_adjustments: prev.renew_job_adjustments.map((x) =>
+                                  x.id === item.id
+                                    ? {
+                                        ...x,
+                                        schedules: x.schedules.map((s, i) =>
+                                          i === sIdx ? { ...s, end: e.target.value } : s
+                                        ),
+                                      }
+                                    : x
+                                ),
+                              }))
+                            }
+                            className="px-3 py-2 border border-gray-200 rounded-apple-sm bg-white text-sm"
+                          />
+                          {item.shift_required === 'YES' && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setForm((prev) => ({
+                                  ...prev,
+                                  renew_job_adjustments: prev.renew_job_adjustments.map((x) =>
+                                    x.id === item.id
+                                      ? { ...x, schedules: x.schedules.filter((_, i) => i !== sIdx) || [{ start: '', end: '' }] }
+                                      : x
+                                  ),
+                                }))
+                              }
+                              className="text-red-500 hover:text-red-700 text-xs px-2 py-1"
+                              disabled={item.schedules.length <= 1}
+                            >
+                              刪除
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                      {item.shift_required === 'YES' && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setForm((prev) => ({
+                              ...prev,
+                              renew_job_adjustments: prev.renew_job_adjustments.map((x) =>
+                                x.id === item.id
+                                  ? {
+                                      ...x,
+                                      schedules: x.schedules.length >= 5 ? x.schedules : [...x.schedules, { start: '', end: '' }],
+                                    }
+                                  : x
+                              ),
+                            }))
+                          }
+                          className="px-3 py-1.5 text-xs rounded border border-gray-200 hover:bg-gray-50"
+                          disabled={item.schedules.length >= 5}
+                        >
+                          新增時段（最多5組）
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-sm font-medium text-gray-700">工作地址（最多 3 項）</div>
+                    {(Array.isArray(item.work_addresses) ? item.work_addresses : ['']).map((addr, aIdx) => (
+                      <div key={`${item.id}-addr-${aIdx}`} className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={addr}
+                          onChange={(e) =>
+                            setForm((prev) => ({
+                              ...prev,
+                              renew_job_adjustments: prev.renew_job_adjustments.map((x) =>
+                                x.id === item.id
+                                  ? {
+                                      ...x,
+                                      work_addresses: (Array.isArray(x.work_addresses) ? x.work_addresses : ['']).map((v, i) =>
+                                        i === aIdx ? e.target.value : v
+                                      ),
+                                    }
+                                  : x
+                              ),
+                            }))
+                          }
+                          placeholder={`工作地址 ${aIdx + 1}`}
+                          className="flex-1 px-3 py-2 border border-gray-200 rounded-apple-sm bg-white text-sm"
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setForm((prev) => ({
+                              ...prev,
+                              renew_job_adjustments: prev.renew_job_adjustments.map((x) =>
+                                x.id === item.id
+                                  ? {
+                                      ...x,
+                                      work_addresses: (() => {
+                                        const list = Array.isArray(x.work_addresses) ? x.work_addresses : [''];
+                                        const next = list.filter((_, i) => i !== aIdx);
+                                        return next.length ? next : [''];
+                                      })(),
+                                    }
+                                  : x
+                              ),
+                            }))
+                          }
+                          className="text-red-500 hover:text-red-700 text-xs px-2 py-1"
+                          disabled={(Array.isArray(item.work_addresses) ? item.work_addresses : ['']).length <= 1}
+                        >
+                          刪除
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setForm((prev) => ({
+                          ...prev,
+                          renew_job_adjustments: prev.renew_job_adjustments.map((x) =>
+                            x.id === item.id
+                              ? {
+                                  ...x,
+                                  work_addresses:
+                                    (Array.isArray(x.work_addresses) ? x.work_addresses : ['']).length >= 3
+                                      ? (Array.isArray(x.work_addresses) ? x.work_addresses : [''])
+                                      : [...(Array.isArray(x.work_addresses) ? x.work_addresses : ['']), ''],
+                                }
+                              : x
+                          ),
+                        }))
+                      }
+                      className="px-3 py-1.5 text-xs rounded border border-gray-200 hover:bg-gray-50"
+                      disabled={(Array.isArray(item.work_addresses) ? item.work_addresses : ['']).length >= 3}
+                    >
+                      新增地址
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : activeSection === 'appendix-2' ? (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">資料截止最新日期（YYYY/MM/DD）*</label>
+                  <input
+                    type="text"
+                    value={form.appendix2_latest_cutoff_date}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        appendix2_latest_cutoff_date: formatDateInputYYYYMMDD(e.target.value),
+                      }))
+                    }
+                    inputMode="numeric"
+                    placeholder="例如：2026/12/31"
+                    className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">全職本地僱員總數 *</label>
+                  <input
+                    type="text"
+                    value={form.appendix2_fulltime_local_total}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        appendix2_fulltime_local_total: e.target.value.replace(/[^\d]/g, ''),
+                      }))
+                    }
+                    placeholder="請輸入人數"
+                    className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                  />
+                </div>
+              </div>
+
+              <div className="border border-gray-200 rounded-apple-sm p-4 bg-white/40">
+                <div className="text-sm font-semibold text-gray-800 mb-3">申請職位</div>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-3 py-2 text-left text-gray-600 font-medium">職位名稱</th>
+                        <th className="px-3 py-2 text-left text-gray-600 font-medium">職務與本地僱員相同人數 *</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {appendix2NamedJobs.length === 0 ? (
+                        <tr>
+                          <td colSpan={2} className="px-3 py-3 text-gray-500">
+                            尚未在「申請常見職位」新增職位
+                          </td>
+                        </tr>
+                      ) : (
+                        appendix2NamedJobs.map((job) => (
+                            <tr key={job.id} className="border-t border-gray-100">
+                              <td className="px-3 py-2 text-gray-800">{job.post_name}</td>
+                              <td className="px-3 py-2">
+                                <input
+                                  type="text"
+                                  value={form.appendix2_same_duty_local_counts?.[job.id] || ''}
+                                  onChange={(e) =>
+                                    setForm((prev) => ({
+                                      ...prev,
+                                      appendix2_same_duty_local_counts: {
+                                        ...(prev.appendix2_same_duty_local_counts || {}),
+                                        [job.id]: e.target.value.replace(/[^\d]/g, ''),
+                                      },
+                                    }))
+                                  }
+                                  placeholder="輸入人數"
+                                  className="w-full md:w-52 px-3 py-2 border border-gray-200 rounded-apple-sm bg-white"
+                                />
+                              </td>
+                            </tr>
+                          ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="mt-3 text-xs">
+                  <span className="text-gray-600">
+                    目前合計：{appendix2DutySum}，總人數：{/^\d+$/.test(String(form.appendix2_fulltime_local_total || '').trim()) ? appendix2LocalTotal : '-'}，
+                    剩餘：{/^\d+$/.test(String(form.appendix2_fulltime_local_total || '').trim()) ? appendix2Remaining : '-'}
+                  </span>
+                  {appendix2OverLimit && (
+                    <p className="text-red-600 mt-1">
+                      職位人數合計（{appendix2DutySum}）不可大於全職本地僱員總數（{appendix2LocalTotal}），請修改後再保存/提交。
+                    </p>
+                  )}
+                </div>
+              </div>
             </div>
           ) : (
             <div className="border border-dashed border-gray-300 rounded-apple-sm p-8 bg-white/40 text-center">
@@ -1078,7 +2339,7 @@ const QuotaApplications: React.FC = () => {
               disabled={savingDraft}
               className="px-4 py-2 text-gray-700 bg-white border border-gray-200 hover:bg-gray-50 rounded-apple-sm font-medium transition-colors disabled:opacity-60"
             >
-              {savingDraft ? '保存中...' : '保存'}
+              {savingDraft ? '儲存中...' : '儲存草稿'}
             </button>
             <button
               type="button"
@@ -1107,7 +2368,7 @@ const QuotaApplications: React.FC = () => {
                 className="px-4 py-2 bg-apple-blue hover:bg-blue-600 text-white rounded-apple-sm font-medium transition-colors disabled:opacity-60"
                 title={allSectionsCompleted ? '' : '請先完成所有板塊'}
               >
-                {isEditing ? '儲存修改' : '建立申請'}
+                {isEditing ? '提交申請' : '提交申請'}
               </button>
             )}
           </div>

@@ -1,0 +1,99 @@
+openapi: 3.0.3
+info:
+  title: Quota Common Jobs Submit API
+  version: 1.0.0
+  description: 常見職位新申請提交前驗證端點
+servers:
+  - url: /api/ai
+paths:
+  /quota-common-jobs-submit:
+    post:
+      summary: 驗證常見職位新申請資料
+      operationId: validateQuotaCommonJobRequest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [common_jobs, common_job_new_request]
+              properties:
+                common_jobs:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id: { type: string }
+                      post_code: { type: string }
+                      post_name: { type: string }
+                common_job_new_request:
+                  type: object
+                  required: [selected_common_job_id, shift_required, schedules, language_requirement, skill_requirement_html]
+                  properties:
+                    selected_common_job_id: { type: string }
+                    shift_required:
+                      type: string
+                      enum: [NO, YES]
+                    schedules:
+                      type: array
+                      items:
+                        type: object
+                        required: [start, end]
+                        properties:
+                          start: { type: string, pattern: '^([01]\\d|2[0-3]):([0-5]\\d)$' }
+                          end: { type: string, pattern: '^([01]\\d|2[0-3]):([0-5]\\d)$' }
+                    language_requirement:
+                      type: object
+                      properties:
+                        spoken:
+                          type: object
+                          properties:
+                            cantonese: { type: string, enum: [NONE, LITTLE, FAIR] }
+                            english: { type: string, enum: [NONE, LITTLE, FAIR] }
+                            other: { type: string, enum: [NONE, LITTLE, FAIR] }
+                        written:
+                          type: object
+                          properties:
+                            cantonese: { type: string, enum: [NONE, LITTLE, FAIR] }
+                            english: { type: string, enum: [NONE, LITTLE, FAIR] }
+                            other: { type: string, enum: [NONE, LITTLE, FAIR] }
+                        other_language_name: { type: string }
+                    skill_requirement_html: { type: string, maxLength: 10000 }
+      responses:
+        '200':
+          description: 驗證通過
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, example: true }
+                  code: { type: string, example: QUOTA_COMMON_JOB_REQUEST_VALID }
+                  cross_day_indexes:
+                    type: array
+                    items: { type: integer }
+                  sanitized:
+                    type: object
+                    properties:
+                      skill_requirement_html: { type: string }
+        '422':
+          description: 驗證失敗
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, example: false }
+                  code: { type: string, example: VALIDATION_FAILED }
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        code: { type: string, example: POSITION_NOT_FOUND }
+                        field: { type: string, example: selected_common_job_id }
+                        message: { type: string, example: 所選職位不存在 }
+        '403':
+          description: 無權限
+        '500':
+          description: 系統錯誤

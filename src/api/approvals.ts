@@ -88,6 +88,12 @@ const writeQuotaMap = (map: Record<string, QuotaDetail[]>) => {
   localStorage.setItem(QUOTA_STORAGE_KEY, JSON.stringify(map));
 };
 
+const clearApprovalQuotaDetails = (approvalId: number) => {
+  const map = readQuotaMap();
+  delete map[String(approvalId)];
+  writeQuotaMap(map);
+};
+
 export const getApprovalQuotaDetails = (approvalId: number): QuotaDetail[] => {
   const map = readQuotaMap();
   const list = Array.isArray(map[String(approvalId)]) ? map[String(approvalId)] : [];
@@ -456,6 +462,7 @@ export const updateApproval = async (id: number, data: Partial<ApprovalCreate>) 
 export const deleteApproval = async (id: number) => {
   try {
     const response = await apiClient.delete(`/approvals/${id}`);
+    clearApprovalQuotaDetails(id);
     appendGlobalAuditLog({
       module: 'approvals',
       action: 'delete',
@@ -473,6 +480,7 @@ export const deleteApproval = async (id: number) => {
       const list = readMockApprovals();
       const next = list.filter(a => a.id !== id);
       writeMockApprovals(next);
+      clearApprovalQuotaDetails(id);
       appendGlobalAuditLog({
         module: 'approvals',
         action: 'delete',
@@ -487,9 +495,7 @@ export const deleteApproval = async (id: number) => {
     const list = readMockApprovals();
     const next = list.filter(a => a.id !== id);
     writeMockApprovals(next);
-    const quotaMap = readQuotaMap();
-    delete quotaMap[String(id)];
-    writeQuotaMap(quotaMap);
+    clearApprovalQuotaDetails(id);
     appendGlobalAuditLog({
       module: 'approvals',
       action: 'delete',

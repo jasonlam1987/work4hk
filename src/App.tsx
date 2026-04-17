@@ -13,6 +13,7 @@ import Approvals from './pages/Approvals';
 import QuotaApplications from './pages/QuotaApplications';
 import Settings from './pages/Settings';
 import DeletionApprovals from './pages/DeletionApprovals';
+import Placeholder from './pages/Placeholder';
 import { useAuthStore } from './store/authStore';
 import { canAccessPath } from './utils/authRole';
 
@@ -43,6 +44,7 @@ function App() {
           <Route path="users" element={<Users />} />
           <Route path="employers" element={<Employers />} />
           <Route path="quota-applications" element={<QuotaApplications />} />
+          <Route path="work-visa-applications" element={<Placeholder title="申請工簽" />} />
           <Route path="workers" element={<Workers />} />
           <Route path="jobs" element={<Jobs />} />
           <Route path="approvals" element={<Approvals />} />

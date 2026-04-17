@@ -1,5 +1,5 @@
 import apiClient from './client';
-import { applyExtendedProfile, saveExtendedProfile } from '../utils/userDirectoryProfile';
+import { applyExtendedProfile, saveExtendedProfile, removeExtendedProfile } from '../utils/userDirectoryProfile';
 
 const DELETED_USERS_KEY = 'mock_deleted_user_ids';
 let supportsExtendedFields = true;
@@ -245,8 +245,16 @@ export const deleteUser = async (id: number) => {
     e.response = { data: { detail: '你無權刪除其他用戶' } };
     throw e;
   }
+  let usernameToClear = '';
+  try {
+    const all = await apiClient.get<User[]>('/users');
+    const target = (all.data || []).find((u) => Number(u.id) === Number(id));
+    usernameToClear = String(target?.username || '').trim();
+  } catch {
+  }
   try {
     const response = await apiClient.delete(`/users/${id}`);
+    removeExtendedProfile({ id, username: usernameToClear });
     return response.data;
   } catch (err: any) {
     const status = err?.response?.status as number | undefined;
@@ -257,6 +265,7 @@ export const deleteUser = async (id: number) => {
       }
       const ids = readDeletedUserIds();
       writeDeletedUserIds([...ids, id]);
+      removeExtendedProfile({ id, username: usernameToClear });
       return { ok: true };
     }
     throw err;

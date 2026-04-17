@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Outlet, NavLink, useNavigate } from 'react-router-dom';
+import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { 
   LayoutDashboard, 
@@ -13,7 +13,8 @@ import {
   ShieldCheck,
   Menu,
   X,
-  Bell
+  Bell,
+  ChevronDown
 } from 'lucide-react';
 import clsx from 'clsx';
 import { canAccessPath, getAuthIdentity, getRoleLabel } from '../utils/authRole';
@@ -23,6 +24,7 @@ import { listDeleteRequests } from '../api/fileDeletion';
 import { listQuotaDeleteRequests } from '../utils/quotaDeleteRequests';
 import { listEntityDeleteRequests } from '../utils/entityDeleteRequests';
 import { subscribeDeleteNotice } from '../utils/deleteNotifications';
+import { getDisplayVersion } from '../utils/version';
 
 type PendingPreviewItem = {
   id: string;
@@ -51,7 +53,9 @@ const writePendingNoticeReads = (map: Record<string, number>) => {
 const Layout: React.FC = () => {
   const { user, logout } = useAuthStore();
   const navigate = useNavigate();
+  const location = useLocation();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [applyDocsOpen, setApplyDocsOpen] = useState(true);
   const [noticeOpen, setNoticeOpen] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
@@ -59,6 +63,7 @@ const Layout: React.FC = () => {
   const [pendingReadMap, setPendingReadMap] = useState<Record<string, number>>(() => readPendingNoticeReads());
   const [messages, setMessages] = useState<ReturnType<typeof getInAppMessages>>([]);
   const identity = useMemo(() => getAuthIdentity(), [user?.id, user?.role_key, user?.username, user?.full_name]);
+  const displayVersion = useMemo(() => getDisplayVersion(), []);
 
   const refreshIndicators = async () => {
     const list = getInAppMessages(identity.userId, identity.roleKey);
@@ -162,17 +167,30 @@ const Layout: React.FC = () => {
     return `${y}/${m}/${day} ${hh}:${mm}`;
   };
 
-  const navItems = [
+  const navItemsTop = [
     { to: '/dashboard', icon: LayoutDashboard, label: '業務概覽' },
     { to: '/employers', icon: Building2, label: '僱主管理' },
-    { to: '/quota-applications', icon: ClipboardList, label: '申請配額' },
     { to: '/approvals', icon: FileText, label: '批文管理' },
     { to: '/workers', icon: Users, label: '勞工管理' },
     { to: '/jobs', icon: Briefcase, label: '職位管理' },
+  ];
+  const navItemsBottom = [
     { to: '/deletion-approvals', icon: ShieldCheck, label: '審批管理' },
     { to: '/settings', icon: Settings, label: '系統設定' },
   ];
-  const visibleNavItems = navItems.filter((item) => canAccessPath(item.to, identity.roleKey));
+  const applyDocChildren = [
+    { to: '/quota-applications', icon: ClipboardList, label: '申請配額' },
+    { to: '/work-visa-applications', icon: FileText, label: '申請工簽' },
+  ].filter((item) => canAccessPath(item.to, identity.roleKey));
+  const isApplyDocActive = applyDocChildren.some(
+    (item) => location.pathname === item.to || location.pathname.startsWith(`${item.to}/`)
+  );
+  const visibleTopNavItems = navItemsTop.filter((item) => canAccessPath(item.to, identity.roleKey));
+  const visibleBottomNavItems = navItemsBottom.filter((item) => canAccessPath(item.to, identity.roleKey));
+
+  useEffect(() => {
+    if (isApplyDocActive) setApplyDocsOpen(true);
+  }, [isApplyDocActive]);
 
   return (
     <div className="min-h-screen bg-apple-gray flex">
@@ -197,7 +215,7 @@ const Layout: React.FC = () => {
         </div>
 
         <div className="flex-1 overflow-y-auto px-4 space-y-1">
-          {visibleNavItems.map((item) => (
+          {visibleTopNavItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -218,6 +236,65 @@ const Layout: React.FC = () => {
               )}
             </NavLink>
           ))}
+          {applyDocChildren.length > 0 && (
+            <>
+              <button
+                type="button"
+                onClick={() => setApplyDocsOpen((prev) => !prev)}
+                className={clsx(
+                  "w-full relative flex items-center px-3 py-2.5 rounded-apple-sm transition-colors duration-200",
+                  isApplyDocActive
+                    ? "bg-apple-blue/10 text-apple-blue font-medium"
+                    : "text-gray-600 hover:bg-gray-100/80 hover:text-gray-900"
+                )}
+              >
+                <ClipboardList className="w-5 h-5" />
+                <span className="ml-3 flex-1 text-left">申請文件</span>
+                <ChevronDown className={clsx("w-4 h-4 transition-transform", applyDocsOpen ? "rotate-180" : "rotate-0")} />
+              </button>
+              {applyDocsOpen && (
+                <div className="ml-7 pl-3 border-l border-gray-200 space-y-1">
+                  {applyDocChildren.map((item) => (
+                    <NavLink
+                      key={item.to}
+                      to={item.to}
+                      onClick={() => setIsSidebarOpen(false)}
+                      className={({ isActive }) => clsx(
+                        "relative flex items-center space-x-2 px-3 py-2 rounded-apple-sm text-sm transition-colors duration-200",
+                        isActive
+                          ? "bg-apple-blue/10 text-apple-blue font-medium"
+                          : "text-gray-600 hover:bg-gray-100/80 hover:text-gray-900"
+                      )}
+                    >
+                      <item.icon className="w-4 h-4" />
+                      <span>{item.label}</span>
+                    </NavLink>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+          {visibleBottomNavItems.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              onClick={() => setIsSidebarOpen(false)}
+              className={({ isActive }) => clsx(
+                "relative flex items-center space-x-3 px-3 py-2.5 rounded-apple-sm transition-colors duration-200",
+                isActive
+                  ? "bg-apple-blue/10 text-apple-blue font-medium"
+                  : "text-gray-600 hover:bg-gray-100/80 hover:text-gray-900"
+              )}
+            >
+              <item.icon className="w-5 h-5" />
+              <span>{item.label}</span>
+              {item.to === '/deletion-approvals' && pendingApprovalCount > 0 && (
+                <span className="absolute right-2 top-1 min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[10px] leading-4 text-center">
+                  {pendingApprovalCount > 99 ? '99+' : pendingApprovalCount}
+                </span>
+              )}
+            </NavLink>
+          ))}
         </div>
 
         <div className="p-4 border-t border-gray-200/50">
@@ -225,6 +302,7 @@ const Layout: React.FC = () => {
             <div className="flex flex-col">
               <span className="text-sm font-medium text-gray-900">{userDisplayPipe(user)}</span>
               <span className="text-xs text-gray-500">{getRoleLabel(user?.role_key || '')}</span>
+              <span className="text-[11px] text-gray-400 mt-0.5">Version {displayVersion}</span>
             </div>
             <div className="relative flex items-center gap-1">
               <button

@@ -14,7 +14,8 @@
     "check:watch": "tsc -b --noEmit --watch --preserveWatchOutput",
     "test:unit": "vitest run --coverage",
     "test:e2e": "playwright test",
-    "migrate:storage": "node scripts/migrate-storage-root.mjs"
+    "migrate:storage": "node scripts/migrate-storage-root.mjs",
+    "release:est-hk": "node scripts/release-est-hk.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.102.1",

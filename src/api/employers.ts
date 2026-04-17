@@ -76,6 +76,16 @@ const persistExtFields = (employer: { id?: number; name?: string; company_incorp
   writeExtMap(map);
 };
 
+const removeExtFields = (employer: { id?: number; name?: string }) => {
+  const map = readExtMap();
+  const idKey = extKey(employer.id, undefined);
+  delete map[idKey];
+  if (employer.name) {
+    delete map[`name:${String(employer.name).trim().toLowerCase()}`];
+  }
+  writeExtMap(map);
+};
+
 export interface Employer {
   id: number;
   name: string;
@@ -105,15 +115,15 @@ export const getEmployers = async (params?: { q?: string; limit?: number; offset
 export const createEmployer = async (data: EmployerCreate) => {
   try {
     const response = await apiClient.post<Employer>('/employers', data);
-    const out = applyExtFields([response.data])[0];
     persistExtFields({
-      id: out.id,
-      name: out.name,
+      id: response.data?.id,
+      name: response.data?.name,
       company_incorporation_number: data.company_incorporation_number,
       contact_person: data.contact_person,
       phone_code: data.phone_code,
       contact_phone: data.contact_phone,
     });
+    const out = applyExtFields([response.data])[0];
     appendGlobalAuditLog({
       module: 'employers',
       action: 'create',
@@ -142,15 +152,15 @@ export const createEmployer = async (data: EmployerCreate) => {
       delete (fallback as any).phone_code;
       delete (fallback as any).contact_phone;
       const response = await apiClient.post<Employer>('/employers', fallback);
-      const out = applyExtFields([response.data])[0];
       persistExtFields({
-        id: out.id,
-        name: out.name,
+        id: response.data?.id,
+        name: response.data?.name,
         company_incorporation_number: data.company_incorporation_number,
         contact_person: data.contact_person,
         phone_code: data.phone_code,
         contact_phone: data.contact_phone,
       });
+      const out = applyExtFields([response.data])[0];
       appendGlobalAuditLog({
         module: 'employers',
         action: 'create',
@@ -167,15 +177,15 @@ export const createEmployer = async (data: EmployerCreate) => {
 export const updateEmployer = async (id: number, data: Partial<EmployerCreate>) => {
   try {
     const response = await apiClient.patch<Employer>(`/employers/${id}`, data);
-    const out = applyExtFields([response.data])[0];
     persistExtFields({
-      id: out.id,
-      name: out.name,
+      id: response.data?.id,
+      name: response.data?.name,
       company_incorporation_number: data.company_incorporation_number,
       contact_person: data.contact_person,
       phone_code: data.phone_code,
       contact_phone: data.contact_phone,
     });
+    const out = applyExtFields([response.data])[0];
     appendGlobalAuditLog({
       module: 'employers',
       action: 'update',
@@ -204,15 +214,15 @@ export const updateEmployer = async (id: number, data: Partial<EmployerCreate>) 
       delete (fallback as any).phone_code;
       delete (fallback as any).contact_phone;
       const response = await apiClient.patch<Employer>(`/employers/${id}`, fallback);
-      const out = applyExtFields([response.data])[0];
       persistExtFields({
-        id: out.id,
-        name: out.name,
+        id: response.data?.id,
+        name: response.data?.name,
         company_incorporation_number: data.company_incorporation_number,
         contact_person: data.contact_person,
         phone_code: data.phone_code,
         contact_phone: data.contact_phone,
       });
+      const out = applyExtFields([response.data])[0];
       appendGlobalAuditLog({
         module: 'employers',
         action: 'update',
@@ -226,8 +236,10 @@ export const updateEmployer = async (id: number, data: Partial<EmployerCreate>) 
   }
 };
 
-export const deleteEmployer = async (id: number) => {
+export const deleteEmployer = async (id: number, employerName?: string) => {
   const response = await apiClient.delete(`/employers/${id}`);
+  const serverName = String((response as any)?.data?.name || '').trim();
+  removeExtFields({ id, name: employerName || serverName });
   appendGlobalAuditLog({
     module: 'employers',
     action: 'delete',

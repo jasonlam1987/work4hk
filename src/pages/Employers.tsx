@@ -689,7 +689,7 @@ const Employers: React.FC = () => {
 
     setSaving(true);
     try {
-      await deleteEmployer(targetId);
+      await deleteEmployer(targetId, deleteTarget.name);
       sessionStorage.removeItem('dashboardStats');
       setHasLoaded(true);
     } catch (err: any) {

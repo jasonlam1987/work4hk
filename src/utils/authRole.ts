@@ -29,9 +29,9 @@ export const normalizeRoleKey = (roleRaw: string) => {
 };
 
 const roleRouteAccess: Record<string, string[]> = {
-  super_admin: ['/dashboard', '/users', '/employers', '/quota-applications', '/approvals', '/workers', '/jobs', '/deletion-approvals', '/settings'],
-  admin: ['/dashboard', '/users', '/employers', '/quota-applications', '/approvals', '/workers', '/jobs', '/settings'],
-  partner: ['/dashboard', '/quota-applications', '/approvals', '/workers', '/jobs'],
+  super_admin: ['/dashboard', '/users', '/employers', '/quota-applications', '/work-visa-applications', '/approvals', '/workers', '/jobs', '/deletion-approvals', '/settings'],
+  admin: ['/dashboard', '/users', '/employers', '/quota-applications', '/work-visa-applications', '/approvals', '/workers', '/jobs', '/settings'],
+  partner: ['/dashboard', '/quota-applications', '/work-visa-applications', '/approvals', '/workers', '/jobs'],
   employer: ['/dashboard', '/workers', '/jobs'],
   employee: ['/dashboard'],
 };
