@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Approval, getApprovals } from '../../../api/approvals';
+import { Approval, getApprovals, QuotaDetail, setApprovalQuotaDetails } from '../../../api/approvals';
 import { Employer, getEmployers } from '../../../api/employers';
 import { Worker, getWorkers } from '../../../api/workers';
 
 const WORKERS_CACHE_KEY = 'cache_workers_list_v1';
 const EMPLOYERS_CACHE_KEY = 'cache_employers_list_v1';
 const APPROVALS_CACHE_KEY = 'cache_approvals_list_v1';
+const QUOTA_APP_CACHE_KEY = 'quota_application_records_v1';
 const WORKERS_PERF_KEY = 'workers_perf_metrics_v1';
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const SEARCH_DEBOUNCE_MS = 350;
@@ -33,6 +34,111 @@ const writeCachedItems = <T,>(key: string, items: T[]) => {
   } catch {
     // Ignore quota and private mode write failures.
   }
+};
+
+const readQuotaAppRecords = (): any[] => {
+  try {
+    const raw = localStorage.getItem(QUOTA_APP_CACHE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const normalizeSeq4 = (v: string) => String(v || '').replace(/[^\d]/g, '').padStart(4, '0').slice(-4);
+
+const hashToPositiveInt = (input: string) => {
+  let h = 0;
+  const s = String(input || '');
+  for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+};
+
+const deriveAppliedCount = (row: any, category: string) => {
+  const newCount = Number(String(row?.apply_count_new || '').replace(/[^\d]/g, '') || 0);
+  const renewCount = Number(String(row?.apply_count_renewal || '').replace(/[^\d]/g, '') || 0);
+  if (category === '新申請') return newCount;
+  if (category === '續約') return renewCount;
+  return newCount + renewCount;
+};
+
+const scheduleText = (slots?: Array<{ start?: string; end?: string }>) =>
+  (Array.isArray(slots) ? slots : [])
+    .map((s) => {
+      const start = String(s?.start || '').trim();
+      const end = String(s?.end || '').trim();
+      return start && end ? `${start}-${end}` : '';
+    })
+    .filter(Boolean)
+    .join('；');
+
+const toQuotaDetailList = (record: any): QuotaDetail[] => {
+  const jobs = Array.isArray(record?.common_jobs) ? record.common_jobs : [];
+  const reqs = Array.isArray(record?.common_job_new_requests) ? record.common_job_new_requests : [];
+  const reqMap = new Map<string, any>();
+  for (const r of reqs) {
+    const id = String(r?.selected_common_job_id || '').trim();
+    if (id) reqMap.set(id, r);
+  }
+  const out: QuotaDetail[] = [];
+  let seq = 1;
+  for (const job of jobs) {
+    const count = deriveAppliedCount(job, String(record?.category || '新申請'));
+    if (!Number.isFinite(count) || count <= 0) continue;
+    const jobId = String(job?.id || '').trim();
+    const req = jobId ? reqMap.get(jobId) : undefined;
+    const locations = (Array.isArray(req?.work_addresses) ? req.work_addresses : [])
+      .map((x: any) => String(x || '').trim())
+      .filter(Boolean)
+      .slice(0, 3);
+    const months = Number(String(job?.employment_months || '').replace(/[^\d]/g, '') || 0);
+    for (let i = 0; i < count; i += 1) {
+      out.push({
+        quota_seq: normalizeSeq4(String(seq)),
+        work_location: locations[0] || '',
+        work_locations: locations,
+        job_title: String(job?.post_name || '').trim(),
+        monthly_salary: 0,
+        work_hours: scheduleText(req?.schedules),
+        employment_months: Number.isFinite(months) ? months : 0,
+      });
+      seq += 1;
+    }
+  }
+  return out;
+};
+
+const mergeQuotaApprovedAsApprovals = (base: Approval[]): Approval[] => {
+  const records = readQuotaAppRecords().filter((r) => String(r?.status || '') === '已批出');
+  if (records.length === 0) return base;
+  const byNo = new Set(base.map((a) => String(a.approval_number || '').trim().toLowerCase()).filter(Boolean));
+  const merged = [...base];
+  for (const r of records) {
+    const approvalNo = String(r?.application_no || '').trim().toUpperCase();
+    if (!approvalNo) continue;
+    if (byNo.has(approvalNo.toLowerCase())) continue;
+    const employerId = Number(r?.employer_id || 0);
+    if (!employerId) continue;
+    const syntheticId = 700000000 + (hashToPositiveInt(String(r?.id || approvalNo)) % 100000000);
+    const quotaDetails = toQuotaDetailList(r);
+    setApprovalQuotaDetails(syntheticId, quotaDetails);
+    merged.push({
+      id: syntheticId,
+      employer_id: employerId,
+      employer_name: String(r?.employer_name_cn || r?.employer_name_en || ''),
+      partner_id: 0,
+      approval_number: approvalNo,
+      department: '勞工處',
+      issue_date: String(r?.submitted_at || '').slice(0, 10) || undefined,
+      expiry_date: undefined,
+      signatory_name: '',
+      quota_quantity: quotaDetails.length,
+      quota_details: quotaDetails,
+    } as Approval);
+    byNo.add(approvalNo.toLowerCase());
+  }
+  return merged;
 };
 
 export const useWorkersPageData = (search: string) => {
@@ -120,13 +226,15 @@ export const useWorkersPageData = (search: string) => {
     const run = (async () => {
     try {
       const list = await getApprovals({ limit: 300 });
-      setApprovals(list);
-      writeCachedItems(APPROVALS_CACHE_KEY, list);
-      return list;
+      const merged = mergeQuotaApprovedAsApprovals(list);
+      setApprovals(merged);
+      writeCachedItems(APPROVALS_CACHE_KEY, merged);
+      return merged;
     } catch {
       const cached = readCachedEntry<Approval>(APPROVALS_CACHE_KEY).items;
-      setApprovals(cached);
-      return cached;
+      const merged = mergeQuotaApprovedAsApprovals(cached);
+      setApprovals(merged);
+      return merged;
     }
     })();
     inFlightApprovalsRef.current = run;

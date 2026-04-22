@@ -20,6 +20,7 @@ import { markDeletePending, releaseDeletePending } from '../utils/deletePendingS
 import { useWorkersPageData } from '../features/workers/hooks/useWorkersPageData';
 import { buildWorkerSubmitPayload, validateWorkerSubmitInput } from '../features/workers/form/workerSubmitService';
 import { submitEntityDeleteRequest } from '../utils/entityDeleteRequests';
+import { resolveApprovalEmployerId } from '../utils/approvalEmployer';
 
 const MAX_FILES_PER_CATEGORY = 10;
 const MAX_FILE_SIZE = MAX_UPLOAD_SIZE;
@@ -213,7 +214,7 @@ const Workers: React.FC = () => {
 
   const filteredApprovals = useMemo(() => {
     const employerFiltered = employerId
-      ? approvals.filter(a => Number((a as any).employer_id ?? (a as any).employerId) === employerId)
+      ? approvals.filter(a => resolveApprovalEmployerId(a) === employerId)
       : approvals;
     const q = approvalQuery.trim().toLowerCase();
     const raw = q
@@ -231,19 +232,81 @@ const Workers: React.FC = () => {
   }, [approvals, approvalQuery, employerId]);
 
   const quotaOptions = useMemo(() => {
+    const occupiedSeqSet = new Set<string>();
+    for (const w of workers) {
+      if (selectedId && Number(w.id) === Number(selectedId)) continue;
+      const wApprovalId = Number((w as any).approval_id || 0);
+      if (!approvalId || wApprovalId !== Number(approvalId)) continue;
+      const uiStatus = labourStatusToUi((w as any).labour_status || '');
+      if (uiStatus === '離職') continue;
+      const seq = String((w as any).quota_seq || '').replace(/[^\d]/g, '').padStart(4, '0').slice(-4);
+      if (seq) occupiedSeqSet.add(seq);
+    }
+    const currentSeq = String(selectedQuotaSeq || '').replace(/[^\d]/g, '').padStart(4, '0').slice(-4);
     return selectedApprovalQuotaDetails
       .map(q => ({
         seq: String(q.quota_seq || '').replace(/[^\d]/g, '').padStart(4, '0').slice(-4),
         detail: q,
       }))
-      .filter(x => x.seq);
-  }, [selectedApprovalQuotaDetails]);
+      .filter(x => x.seq)
+      .filter(x => !occupiedSeqSet.has(x.seq) || x.seq === currentSeq);
+  }, [selectedApprovalQuotaDetails, workers, approvalId, selectedId, selectedQuotaSeq]);
 
   const selectedQuotaDetail = useMemo(() => {
     const key = String(selectedQuotaSeq || '').replace(/[^\d]/g, '').padStart(4, '0').slice(-4);
     if (!key) return undefined;
     return quotaOptions.find(x => x.seq === key)?.detail;
   }, [quotaOptions, selectedQuotaSeq]);
+
+  useEffect(() => {
+    if (!approvalId) return;
+    const matchedApproval = approvals.find(a => Number((a as any).id) === Number(approvalId));
+    const employerMatched = matchedApproval
+      ? resolveApprovalEmployerId(matchedApproval) === Number(employerId || 0)
+      : false;
+    if (!employerMatched) {
+      setFormData(prev => ({ ...prev, approval_id: undefined }));
+      setApprovalQuery('');
+      setProfile(prev => ({
+        ...prev,
+        approval_id: undefined,
+        approval_number: undefined,
+        quota_seq: '',
+        work_locations: [],
+      }));
+    }
+  }, [approvalId, employerId, approvals]);
+
+  useEffect(() => {
+    if (!employerId) return;
+    const hasApprovalsForEmployer = approvals.some(
+      (a) => resolveApprovalEmployerId(a) === Number(employerId)
+    );
+    if (!hasApprovalsForEmployer) {
+      setFormData(prev => ({ ...prev, approval_id: undefined }));
+      setApprovalQuery('');
+      setProfile(prev => ({
+        ...prev,
+        approval_id: undefined,
+        approval_number: undefined,
+        quota_seq: '',
+        work_locations: [],
+      }));
+    }
+  }, [employerId, approvals]);
+
+  useEffect(() => {
+    if (!selectedQuotaSeq) return;
+    const key = String(selectedQuotaSeq).replace(/[^\d]/g, '').padStart(4, '0').slice(-4);
+    const exists = quotaOptions.some(x => x.seq === key);
+    if (!exists) {
+      setProfile(prev => ({
+        ...prev,
+        quota_seq: '',
+        work_locations: [],
+      }));
+    }
+  }, [selectedQuotaSeq, quotaOptions]);
 
   const employerLabel = (e: Employer) => `${e.name}`.trim();
   const approvalLabel = (a: Approval) => String(a.approval_number || '').toUpperCase();
@@ -514,11 +577,59 @@ const Workers: React.FC = () => {
       departure_date: (worker as any).departure_date ?? p.departure_date ?? '',
       work_batches: Array.isArray(p.work_batches) ? p.work_batches : [],
     };
-    setProfile(merged);
+    const workerEmployerId = Number(worker.employer_id || 0) || undefined;
+    const candidateApprovalId = Number((merged as any).approval_id || 0) || undefined;
+    const matchedApproval = candidateApprovalId
+      ? approvals.find((a) => Number((a as any).id || 0) === Number(candidateApprovalId))
+      : undefined;
+    const approvalBelongsToEmployer = matchedApproval
+      ? resolveApprovalEmployerId(matchedApproval) === Number(workerEmployerId || 0)
+      : false;
+    let sanitizedProfile: WorkerProfile = { ...merged };
+    if (!approvalBelongsToEmployer) {
+      sanitizedProfile = {
+        ...sanitizedProfile,
+        approval_id: undefined,
+        approval_number: undefined,
+        quota_seq: '',
+        work_locations: [],
+      };
+    } else {
+      const seq = String(sanitizedProfile.quota_seq || '').replace(/[^\d]/g, '').padStart(4, '0').slice(-4);
+      const details = getApprovalQuotaDetails(Number(candidateApprovalId));
+      const matchedQuota = details.find((q) => String(q.quota_seq || '').replace(/[^\d]/g, '').padStart(4, '0').slice(-4) === seq);
+      if (!matchedQuota) {
+        sanitizedProfile = {
+          ...sanitizedProfile,
+          quota_seq: '',
+          work_locations: [],
+        };
+      } else {
+        const locations = (Array.isArray((matchedQuota as any).work_locations)
+          ? (matchedQuota as any).work_locations
+          : [String((matchedQuota as any).work_location || '')]
+        )
+          .map((x: any) => String(x || '').trim())
+          .filter(Boolean)
+          .slice(0, 3);
+        sanitizedProfile = {
+          ...sanitizedProfile,
+          quota_seq: seq,
+          work_locations: locations,
+        };
+      }
+    }
+    setProfile(sanitizedProfile);
+    setWorkerProfile(worker.id, sanitizedProfile);
+    setFormData((prev) => ({
+      ...prev,
+      approval_id: sanitizedProfile.approval_id,
+      employer_id: workerEmployerId,
+    }));
 
     const employer = employers.find(e => e.id === Number(worker.employer_id));
     setEmployerQuery(employer ? employer.name : worker.employer_name || '');
-    const approvalNumber = (worker as any).approval_number || merged.approval_number;
+    const approvalNumber = (worker as any).approval_number || sanitizedProfile.approval_number;
     setApprovalQuery(approvalNumber ? String(approvalNumber) : '');
 
     setIsEditing(true);

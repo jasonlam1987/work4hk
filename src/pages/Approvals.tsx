@@ -15,6 +15,7 @@ import { pushDeleteNotice } from '../utils/deleteNotifications';
 import { pushInAppMessage } from '../utils/inAppMessages';
 import { markDeletePending, releaseDeletePending } from '../utils/deletePendingState';
 import { submitEntityDeleteRequest } from '../utils/entityDeleteRequests';
+import { resolveApprovalEmployerId } from '../utils/approvalEmployer';
 
 interface StoredApprovalFile {
   id: string;
@@ -41,6 +42,7 @@ type QuotaDetailForm = {
   monthly_salary: string;
   work_hours: string;
   employment_months: string;
+  import_group?: string;
   _deleted?: boolean;
 };
 
@@ -80,6 +82,18 @@ type QuotaApplicationRecord = QuotaApplicationForm & {
   id: string;
   created_at: string;
   updated_at: string;
+  common_jobs?: Array<{
+    id: string;
+    post_name?: string;
+    employment_months?: string;
+    apply_count_new?: string;
+    apply_count_renewal?: string;
+  }>;
+  common_job_new_requests?: Array<{
+    selected_common_job_id?: string;
+    schedules?: Array<{ start?: string; end?: string }>;
+    work_addresses?: string[];
+  }>;
 };
 
 const initialForm: ApprovalCreate = {
@@ -120,6 +134,26 @@ const emptyQuotaRow = (): QuotaDetailForm => ({
   work_hours: '',
   employment_months: '',
 });
+
+const normalizeSeq4 = (v: string) => String(v || '').replace(/[^\d]/g, '').padStart(4, '0').slice(-4);
+
+const scheduleText = (slots?: Array<{ start?: string; end?: string }>) =>
+  (Array.isArray(slots) ? slots : [])
+    .map((s) => {
+      const start = String(s?.start || '').trim();
+      const end = String(s?.end || '').trim();
+      return start && end ? `${start}-${end}` : '';
+    })
+    .filter(Boolean)
+    .join('；');
+
+const deriveAppliedCount = (row: any, category: string) => {
+  const newCount = Number(String(row?.apply_count_new || '').replace(/[^\d]/g, '') || 0);
+  const renewCount = Number(String(row?.apply_count_renewal || '').replace(/[^\d]/g, '') || 0);
+  if (category === '新申請') return newCount;
+  if (category === '續約') return renewCount;
+  return newCount + renewCount;
+};
 
 const APPROVALS_CACHE_KEY = 'cache_approvals_list_v1';
 const APPROVALS_PERF_KEY = 'approvals_perf_metrics_v1';
@@ -590,7 +624,7 @@ const Approvals: React.FC = () => {
     const q = search.trim().toLowerCase();
     if (!q) return approvals;
     return approvals.filter(a => {
-      const employerId = (a as any).employer_id ?? (a as any).employerId;
+      const employerId = resolveApprovalEmployerId(a);
       const employerName = getEmployerDisplayById(employerId, a.employer_name);
       const hay = `${String(a.approval_number || '')} ${String(a.department || '')} ${String(employerName || '')} ${String(a.signatory_name || '')}`.toLowerCase();
       return hay.includes(q);
@@ -626,6 +660,50 @@ const Approvals: React.FC = () => {
       return sameEmployer && approved;
     });
   }, [quotaApplications, formData.employer_id]);
+
+  const buildQuotaRowsFromApplication = (app: QuotaApplicationRecord): QuotaDetailForm[] => {
+    const jobs = Array.isArray(app.common_jobs) ? app.common_jobs : [];
+    const requests = Array.isArray(app.common_job_new_requests) ? app.common_job_new_requests : [];
+    const requestMap = new Map<string, { schedules?: Array<{ start?: string; end?: string }>; work_addresses?: string[] }>();
+    for (const req of requests) {
+      const jobId = String(req?.selected_common_job_id || '').trim();
+      if (!jobId) continue;
+      requestMap.set(jobId, {
+        schedules: Array.isArray(req?.schedules) ? req!.schedules : [],
+        work_addresses: Array.isArray(req?.work_addresses) ? req!.work_addresses : [],
+      });
+    }
+
+    const rows: QuotaDetailForm[] = [];
+    let seq = 1;
+    for (const job of jobs) {
+      const count = deriveAppliedCount(job, String(app.category || '新申請'));
+      if (!Number.isFinite(count) || count <= 0) continue;
+      const jobId = String(job?.id || '').trim();
+      const req = jobId ? requestMap.get(jobId) : undefined;
+      const location1 = String(req?.work_addresses?.[0] || '').trim();
+      const location2 = String(req?.work_addresses?.[1] || '').trim();
+      const location3 = String(req?.work_addresses?.[2] || '').trim();
+      const hours = scheduleText(req?.schedules);
+      const months = String(job?.employment_months || '').replace(/[^\d]/g, '');
+      const title = String(job?.post_name || '').trim();
+      for (let i = 0; i < count; i += 1) {
+        rows.push({
+          quota_seq: normalizeSeq4(String(seq)),
+          work_location_1: location1,
+          work_location_2: location2,
+          work_location_3: location3,
+          job_title: title,
+          monthly_salary: '0',
+          work_hours: hours,
+          employment_months: months,
+          import_group: jobId ? `job-${jobId}` : undefined,
+        });
+        seq += 1;
+      }
+    }
+    return rows;
+  };
 
   const handleOpenQuotaCreate = () => {
     ensureLookupsLoaded();
@@ -744,7 +822,7 @@ const Approvals: React.FC = () => {
   const exportApprovalsCsv = () => {
     const headers = ['審批編號', '僱主', '簽署人', '配額數量', '截止日期'];
     const rows = visibleApprovals.map((approval) => {
-      const employerId = (approval as any).employer_id ?? (approval as any).employerId;
+      const employerId = resolveApprovalEmployerId(approval);
       return [
         String(approval.approval_number || '').toUpperCase(),
         getEmployerDisplayById(employerId, approval.employer_name),
@@ -766,7 +844,7 @@ const Approvals: React.FC = () => {
   };
 
   const handleOpenEdit = (approval: Approval) => {
-    const employerId = (approval as any).employer_id ?? (approval as any).employerId;
+    const employerId = resolveApprovalEmployerId(approval);
     const partnerId = (approval as any).partner_id ?? (approval as any).partnerId;
 
     setFormData({ 
@@ -958,7 +1036,7 @@ const Approvals: React.FC = () => {
       setSaving(true);
       try {
         const payload = approvals.find((x) => x.id === targetId);
-        const company = getEmployerDisplayById((payload as any)?.employer_id ?? (payload as any)?.employerId, payload?.employer_name);
+        const company = getEmployerDisplayById(resolveApprovalEmployerId(payload), payload?.employer_name);
         const resp = submitEntityDeleteRequest({
           module: 'approvals',
           entityId: targetId,
@@ -1089,6 +1167,28 @@ const Approvals: React.FC = () => {
         work_hours: String(r.work_hours || '').trim(),
         employment_months: Number(String(r.employment_months || '').replace(/[^\d]/g, '')),
       }));
+  };
+
+  const updateQuotaRow = (
+    idx: number,
+    patch: Partial<QuotaDetailForm>,
+    options?: { syncGroup?: boolean }
+  ) => {
+    setQuotaDetails((prev) => {
+      const target = prev[idx];
+      if (!target) return prev;
+      const syncGroup = Boolean(options?.syncGroup && target.import_group);
+      if (!syncGroup) {
+        return prev.map((r, i) => (i === idx ? { ...r, ...patch } : r));
+      }
+      return prev.map((r, i) => {
+        if (i === idx) return { ...r, ...patch };
+        if (r.import_group && r.import_group === target.import_group) {
+          return { ...r, ...patch };
+        }
+        return r;
+      });
+    });
   };
 
   useEffect(() => {
@@ -1310,9 +1410,9 @@ const Approvals: React.FC = () => {
                     </td>
                       <td
                         className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 max-w-[260px] truncate"
-                        title={getEmployerDisplayById((approval as any).employer_id ?? (approval as any).employerId, approval.employer_name)}
+                        title={getEmployerDisplayById(resolveApprovalEmployerId(approval), approval.employer_name)}
                       >
-                        {getEmployerDisplayById((approval as any).employer_id ?? (approval as any).employerId, approval.employer_name)}
+                        {getEmployerDisplayById(resolveApprovalEmployerId(approval), approval.employer_name)}
                       </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {approval.signatory_name || '-'}
@@ -2005,6 +2105,10 @@ const Approvals: React.FC = () => {
                     const appNo = String(selected.application_no || '').trim().toUpperCase();
                     if (!appNo) return;
                     setFormData((prev) => ({ ...prev, approval_number: appNo }));
+                    const importedRows = buildQuotaRowsFromApplication(selected);
+                    if (importedRows.length > 0) {
+                      setQuotaDetails(importedRows);
+                    }
                   }}
                   disabled={!formData.employer_id}
                   className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all disabled:bg-gray-50 disabled:text-gray-400"
@@ -2081,6 +2185,32 @@ const Approvals: React.FC = () => {
             <div className="space-y-3">
               {quotaDetails.map((row, idx) => (
                 <div key={idx} className="border border-gray-200 rounded-apple-sm p-3 bg-white">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-xs text-gray-500">
+                      配額項目 #{idx + 1}
+                      {row.import_group && <span className="ml-2 text-apple-blue">已按職位分組</span>}
+                    </div>
+                    {row.import_group && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const patch: Partial<QuotaDetailForm> = {
+                            work_location_1: row.work_location_1,
+                            work_location_2: row.work_location_2,
+                            work_location_3: row.work_location_3,
+                            job_title: row.job_title,
+                            monthly_salary: row.monthly_salary,
+                            work_hours: row.work_hours,
+                            employment_months: row.employment_months,
+                          };
+                          updateQuotaRow(idx, patch, { syncGroup: true });
+                        }}
+                        className="px-2 py-1 text-xs border border-apple-blue text-apple-blue rounded-apple-sm hover:bg-blue-50"
+                      >
+                        同步同職位
+                      </button>
+                    )}
+                  </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs text-gray-500 mb-1">配額序號 *</label>
@@ -2089,10 +2219,10 @@ const Approvals: React.FC = () => {
                         value={row.quota_seq}
                         onChange={(e) => {
                           const v = e.target.value.replace(/[^\d]/g, '').slice(0, 4);
-                          setQuotaDetails(prev => prev.map((r, i) => (i === idx ? { ...r, quota_seq: v } : r)));
+                          updateQuotaRow(idx, { quota_seq: v });
                         }}
                         onBlur={() => {
-                          setQuotaDetails(prev => prev.map((r, i) => (i === idx ? { ...r, quota_seq: r.quota_seq ? r.quota_seq.padStart(4, '0') : '' } : r)));
+                          updateQuotaRow(idx, { quota_seq: row.quota_seq ? row.quota_seq.padStart(4, '0') : '' });
                         }}
                         placeholder="0001"
                         className="w-full px-3 py-2 border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50"
@@ -2105,7 +2235,7 @@ const Approvals: React.FC = () => {
                         type="text"
                         maxLength={200}
                         value={row.work_location_1}
-                        onChange={(e) => setQuotaDetails(prev => prev.map((r, i) => (i === idx ? { ...r, work_location_1: e.target.value } : r)))}
+                        onChange={(e) => updateQuotaRow(idx, { work_location_1: e.target.value }, { syncGroup: true })}
                         className="w-full px-3 py-2 border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50"
                         required
                       />
@@ -2116,7 +2246,7 @@ const Approvals: React.FC = () => {
                         type="text"
                         maxLength={200}
                         value={row.work_location_2}
-                        onChange={(e) => setQuotaDetails(prev => prev.map((r, i) => (i === idx ? { ...r, work_location_2: e.target.value } : r)))}
+                        onChange={(e) => updateQuotaRow(idx, { work_location_2: e.target.value }, { syncGroup: true })}
                         className="w-full px-3 py-2 border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50"
                       />
                     </div>
@@ -2126,7 +2256,7 @@ const Approvals: React.FC = () => {
                         type="text"
                         maxLength={200}
                         value={row.work_location_3}
-                        onChange={(e) => setQuotaDetails(prev => prev.map((r, i) => (i === idx ? { ...r, work_location_3: e.target.value } : r)))}
+                        onChange={(e) => updateQuotaRow(idx, { work_location_3: e.target.value }, { syncGroup: true })}
                         className="w-full px-3 py-2 border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50"
                       />
                     </div>
@@ -2136,7 +2266,7 @@ const Approvals: React.FC = () => {
                         type="text"
                         maxLength={100}
                         value={row.job_title}
-                        onChange={(e) => setQuotaDetails(prev => prev.map((r, i) => (i === idx ? { ...r, job_title: e.target.value } : r)))}
+                        onChange={(e) => updateQuotaRow(idx, { job_title: e.target.value }, { syncGroup: true })}
                         className="w-full px-3 py-2 border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50"
                         required
                       />
@@ -2149,7 +2279,7 @@ const Approvals: React.FC = () => {
                         value={row.monthly_salary}
                         onChange={(e) => {
                           const v = formatSalary(e.target.value);
-                          setQuotaDetails(prev => prev.map((r, i) => (i === idx ? { ...r, monthly_salary: v } : r)));
+                          updateQuotaRow(idx, { monthly_salary: v }, { syncGroup: true });
                         }}
                         placeholder="0"
                         className="w-full px-3 py-2 border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50"
@@ -2163,7 +2293,7 @@ const Approvals: React.FC = () => {
                         type="text"
                         maxLength={100}
                         value={row.work_hours}
-                        onChange={(e) => setQuotaDetails(prev => prev.map((r, i) => (i === idx ? { ...r, work_hours: e.target.value } : r)))}
+                        onChange={(e) => updateQuotaRow(idx, { work_hours: e.target.value }, { syncGroup: true })}
                         placeholder="每週 X 天，每天 Y 小時"
                         className="w-full px-3 py-2 border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50"
                         required
@@ -2175,7 +2305,7 @@ const Approvals: React.FC = () => {
                         type="text"
                         inputMode="numeric"
                         value={row.employment_months}
-                        onChange={(e) => setQuotaDetails(prev => prev.map((r, i) => (i === idx ? { ...r, employment_months: e.target.value.replace(/[^\d]/g, '').slice(0, 3) } : r)))}
+                        onChange={(e) => updateQuotaRow(idx, { employment_months: e.target.value.replace(/[^\d]/g, '').slice(0, 3) }, { syncGroup: true })}
                         className="w-full px-3 py-2 border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50"
                         required
                       />

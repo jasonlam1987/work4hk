@@ -411,8 +411,13 @@ const QuotaApplications: React.FC = () => {
 
   const visibleSections = useMemo(() => {
     const isLimitedCompany = form.business_mode === '有限公司';
-    return SECTION_LABELS.filter((x) => !(isLimitedCompany && x.key === 'appendix-1'));
-  }, [form.business_mode]);
+    const isNewOnly = form.category === '新申請';
+    return SECTION_LABELS.filter((x) => {
+      if (isLimitedCompany && x.key === 'appendix-1') return false;
+      if (isNewOnly && x.key === 'renew-jobs') return false;
+      return true;
+    });
+  }, [form.business_mode, form.category]);
 
   const sectionIndex = useMemo(
     () => visibleSections.findIndex((x) => x.key === activeSection),
@@ -427,7 +432,21 @@ const QuotaApplications: React.FC = () => {
     if (activeSection === 'appendix-1' && form.business_mode === '有限公司') {
       setActiveSection('applicant');
     }
-  }, [activeSection, form.business_mode]);
+    if (activeSection === 'renew-jobs' && form.category === '新申請') {
+      setActiveSection('appendix-2');
+    }
+  }, [activeSection, form.business_mode, form.category]);
+
+  useEffect(() => {
+    if (form.category !== '新申請') return;
+    setSectionDone((prev) => ({ ...prev, 'renew-jobs': true }));
+    setForm((prev) => ({
+      ...prev,
+      renew_old_file_no: '',
+      renew_quota_serial_no: '',
+      renew_job_adjustments: [emptyRenewJobAdjustment()],
+    }));
+  }, [form.category]);
 
   const applicantErrors = useMemo(() => {
     const errs: string[] = [];
@@ -1206,13 +1225,22 @@ const QuotaApplications: React.FC = () => {
             })),
           }),
         });
-        const payload = await resp.json().catch(() => ({}));
-        if (!resp.ok || payload?.ok === false) {
-          const msg = String(payload?.errors?.[0]?.message || payload?.error || '提交驗證失敗');
-          return alert(msg);
+        if (resp.status === 404) {
+          showNotice('warning', '本地未啟動提交驗證服務，已略過遠端驗證並繼續提交');
+        } else {
+          const payload = await resp.json().catch(() => ({}));
+          if (!resp.ok || payload?.ok === false) {
+            const msg = String(payload?.errors?.[0]?.message || payload?.error || '提交驗證失敗');
+            return alert(msg);
+          }
         }
       } catch (err: any) {
-        return alert(String(err?.message || '提交驗證失敗'));
+        const msg = String(err?.message || '');
+        if (/failed to fetch|networkerror|load failed/i.test(msg)) {
+          showNotice('warning', '網絡或驗證服務不可用，已略過遠端驗證並繼續提交');
+        } else {
+          return alert(msg || '提交驗證失敗');
+        }
       }
     }
 

@@ -26,6 +26,9 @@ const Settings: React.FC = () => {
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [auditLogs, setAuditLogs] = useState<GlobalAuditLog[]>([]);
+  const [auditDate, setAuditDate] = useState('');
+  const [auditPage, setAuditPage] = useState(1);
+  const AUDIT_PAGE_SIZE = 25;
 
   const usersRef = useRef<UsersHandle>(null);
 
@@ -96,6 +99,10 @@ const Settings: React.FC = () => {
     }, 300);
     return () => clearTimeout(timer);
   }, [activeTab, search, fetchData]);
+
+  useEffect(() => {
+    if (activeTab === 'audit_logs') setAuditPage(1);
+  }, [activeTab, search, auditDate]);
 
   const handleOpenCreate = () => {
     setIsEditing(false);
@@ -197,12 +204,26 @@ const Settings: React.FC = () => {
 
   const renderTable = () => {
     if (activeTab === 'audit_logs') {
-      const visible = auditLogs.filter((x) => {
+      const toDateKey = (value: string) => {
+        const d = new Date(value);
+        if (Number.isNaN(d.getTime())) return '';
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${y}-${m}-${day}`;
+      };
+
+      const filtered = auditLogs.filter((x) => {
         const q = search.trim().toLowerCase();
-        if (!q) return true;
+        const dateOk = !auditDate || toDateKey(x.at) === auditDate;
+        if (!q) return dateOk;
         const hay = `${x.module} ${x.action} ${x.actor_name} ${x.record_no || ''} ${x.details || ''}`.toLowerCase();
-        return hay.includes(q);
+        return dateOk && hay.includes(q);
       });
+      const totalPages = Math.max(1, Math.ceil(filtered.length / AUDIT_PAGE_SIZE));
+      const currentPage = Math.min(auditPage, totalPages);
+      const start = (currentPage - 1) * AUDIT_PAGE_SIZE;
+      const visible = filtered.slice(start, start + AUDIT_PAGE_SIZE);
       return (
         <div className="p-4">
           <div className="rounded-apple-sm border border-gray-200 bg-white/60 overflow-hidden">
@@ -238,6 +259,27 @@ const Settings: React.FC = () => {
                 )}
               </tbody>
             </table>
+          </div>
+          <div className="mt-3 flex items-center justify-between text-xs text-gray-600">
+            <span>共 {filtered.length} 條，當前第 {currentPage} / {totalPages} 頁（每頁 25 條）</span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setAuditPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage <= 1}
+                className="px-2 py-1 border border-gray-200 rounded disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-50"
+              >
+                上一頁
+              </button>
+              <button
+                type="button"
+                onClick={() => setAuditPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage >= totalPages}
+                className="px-2 py-1 border border-gray-200 rounded disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-50"
+              >
+                下一頁
+              </button>
+            </div>
           </div>
         </div>
       );
@@ -526,17 +568,37 @@ const Settings: React.FC = () => {
 
         {(activeTab === 'partners' || activeTab === 'audit_logs') && (
           <div className="p-4 border-b border-gray-200/50 bg-white/30 flex items-center justify-between">
-            <div className="relative w-full max-w-sm">
-              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                <Search className="h-5 w-5 text-gray-400" />
+            <div className="flex items-center gap-2 w-full">
+              <div className="relative w-full max-w-sm">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <Search className="h-5 w-5 text-gray-400" />
+                </div>
+                <input
+                  type="text"
+                  placeholder={activeTab === 'audit_logs' ? '搜尋日誌（模塊/動作/操作者/內容）...' : `搜尋${getTabLabel(activeTab)}...`}
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="block w-full pl-10 pr-3 py-2 border border-gray-200 rounded-apple-sm leading-5 bg-white/80 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all sm:text-sm"
+                />
               </div>
-              <input
-                type="text"
-                placeholder={activeTab === 'audit_logs' ? '搜尋日誌（模塊/動作/操作者/內容）...' : `搜尋${getTabLabel(activeTab)}...`}
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="block w-full pl-10 pr-3 py-2 border border-gray-200 rounded-apple-sm leading-5 bg-white/80 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all sm:text-sm"
-              />
+              {activeTab === 'audit_logs' && (
+                <input
+                  type="date"
+                  value={auditDate}
+                  onChange={(e) => setAuditDate(e.target.value)}
+                  className="h-10 px-3 border border-gray-200 rounded-apple-sm bg-white/80 text-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue"
+                  title="選擇日誌日期"
+                />
+              )}
+              {activeTab === 'audit_logs' && auditDate && (
+                <button
+                  type="button"
+                  onClick={() => setAuditDate('')}
+                  className="h-10 px-3 text-xs border border-gray-200 rounded-apple-sm hover:bg-gray-50"
+                >
+                  清除日期
+                </button>
+              )}
             </div>
             <button onClick={fetchData} className="p-2 text-gray-500 hover:text-apple-blue hover:bg-blue-50 rounded-full transition-colors ml-2">
               <RefreshCw className={clsx("w-5 h-5", loading && "animate-spin")} />
