@@ -243,6 +243,10 @@ export default async function handler(req: any, res: any) {
     });
   } catch (e: any) {
     const msg = String(e?.message || e);
+    if (msg.includes('invalid module') || msg.includes('invalid owner_id') || msg.includes('invalid payload') || msg.includes('invalid file data')) {
+      console.error('[files] INVALID_REQUEST', { detail: msg });
+      return respond(res, 400, { code: 'INVALID_REQUEST', error: msg, detail: msg });
+    }
     if (msg.includes('file too large')) {
       console.error('[files] FILE_TOO_LARGE', { detail: msg });
       return respond(res, 400, { code: 'FILE_TOO_LARGE', error: '檔案大小超過 10 MB，請壓縮後再上傳' });

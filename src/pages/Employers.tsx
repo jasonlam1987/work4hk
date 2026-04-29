@@ -52,6 +52,15 @@ const EMPLOYERS_CACHE_KEY = 'cache_employers_list_v1';
 const EMPLOYERS_CACHE_TTL_MS = 5 * 60 * 1000;
 const EMPLOYERS_PERF_KEY = 'employers_perf_metrics_v1';
 
+const resolveEmployerId = (employer: Partial<Employer> | null | undefined) => {
+  const raw =
+    (employer as any)?.id ??
+    (employer as any)?.employer_id ??
+    (employer as any)?.employerId;
+  const num = Number(raw || 0);
+  return Number.isFinite(num) && num > 0 ? num : 0;
+};
+
 const Employers: React.FC = () => {
   const [employers, setEmployers] = useState<Employer[]>([]);
   const [loading, setLoading] = useState(false);
@@ -90,7 +99,8 @@ const Employers: React.FC = () => {
   const fileFolderCacheRef = useRef<Record<string, StoredFile[]>>({});
   const optimisticPendingUntilRef = useRef<Record<string, number>>({});
   const uploadInputRef = useRef<HTMLInputElement>(null);
-  const uploadScope = `employers:${selectedEmployerForFiles?.id || 0}:${activeFolder}`;
+  const selectedEmployerId = resolveEmployerId(selectedEmployerForFiles || undefined);
+  const uploadScope = `employers:${selectedEmployerId}:${activeFolder}`;
   const tasksByScope = useUploadStore(s => s.tasksByScope);
   const beginTask = useUploadStore(s => s.beginTask);
   const updateTask = useUploadStore(s => s.updateTask);
@@ -225,18 +235,28 @@ const Employers: React.FC = () => {
   }, [employers.length, hasLoaded]);
 
   const handleOpenFiles = (employer: Employer) => {
+    const ownerId = resolveEmployerId(employer);
+    if (!ownerId) {
+      alert('此企業缺少有效編號（owner_id），暫時無法上傳文件，請先刷新列表或重新建立該企業資料。');
+      return;
+    }
     setSelectedEmployerForFiles(employer);
     setActiveFolder(FOLDERS[0]);
     setIsFileModalOpen(true);
-    loadFolderFiles(employer.id, FOLDERS[0], true);
+    loadFolderFiles(ownerId, FOLDERS[0], true);
     // Warm up other folders so switching tabs feels instant.
     FOLDERS.slice(1).forEach((folder) => {
-      loadFolderFiles(employer.id, folder, false);
+      loadFolderFiles(ownerId, folder, false);
     });
   };
 
   const doUpload = async (file: File) => {
     if (!selectedEmployerForFiles) return;
+    const ownerId = resolveEmployerId(selectedEmployerForFiles);
+    if (!ownerId) {
+      alert('此企業缺少有效編號（owner_id），無法上傳。請先刷新頁面後重試。');
+      return;
+    }
     if (file.size > MAX_UPLOAD_SIZE) {
       alert('檔案大小超過 10 MB，請壓縮後再上傳');
       return;
@@ -247,7 +267,7 @@ const Employers: React.FC = () => {
     try {
       const saved = await uploadManagedFile({
         module: 'employers',
-        owner_id: selectedEmployerForFiles.id,
+        owner_id: ownerId,
         folder: activeFolder,
         file,
         retries: 1,
@@ -258,7 +278,7 @@ const Employers: React.FC = () => {
       const newFile: StoredFile = {
         id: saved.uid,
         uid: saved.uid,
-        employerId: selectedEmployerForFiles.id,
+        employerId: ownerId,
         folder: activeFolder,
         name: saved.original_name,
         size: saved.size,
@@ -270,7 +290,7 @@ const Employers: React.FC = () => {
         uploaderName: (saved as any).uploader_name,
         uploadTime: new Date().toLocaleString(),
       };
-      const cacheKey = folderCacheKey(selectedEmployerForFiles.id, activeFolder);
+      const cacheKey = folderCacheKey(ownerId, activeFolder);
       const nextFolderRows = [newFile, ...(fileFolderCacheRef.current[cacheKey] || [])];
       fileFolderCacheRef.current[cacheKey] = nextFolderRows;
       setStoredFiles(nextFolderRows);

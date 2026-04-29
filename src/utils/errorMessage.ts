@@ -6,8 +6,8 @@ export const normalizeErrorMessage = (err: any, fallback = '操作失敗') => {
     if (!val) return '';
     if (typeof val === 'string') return val;
     if (typeof val?.message === 'string') return val.message;
-    if (typeof val?.error === 'string') return val.error;
     if (typeof val?.detail === 'string') return val.detail;
+    if (typeof val?.error === 'string') return val.error;
     if (Array.isArray(val?.detail) && val.detail.length > 0) {
       const first = val.detail[0];
       const loc = Array.isArray(first?.loc) ? first.loc.join('.') : '';
