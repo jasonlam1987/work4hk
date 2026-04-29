@@ -37,12 +37,6 @@ export default async function handler(req: any, res: any) {
     if (!tokenInQuery && !verifyRole(req)) return respond(res, 403, { code: 'FORBIDDEN', error: 'forbidden' });
 
     if (!isSupabaseStorageEnabled()) {
-      if (process.env.VERCEL) {
-        return respond(res, 500, {
-          code: 'SUPABASE_NOT_CONFIGURED',
-          error: 'supabase storage not configured on vercel',
-        });
-      }
       const local = await import('./_file_store.js');
       await local.ensureDirs();
       const uid = String(req?.query?.uid || '').trim();
