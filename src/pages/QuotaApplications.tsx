@@ -3,6 +3,8 @@ import { CheckCircle2, Edit2, Plus, Search, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import Modal from '../components/Modal';
 import { Employer, getEmployers } from '../api/employers';
+import { Approval, getApprovals, getApprovalQuotaDetails } from '../api/approvals';
+import { Worker, getWorkers } from '../api/workers';
 import { getAuthIdentity, isSuperAdmin } from '../utils/authRole';
 import { appendGlobalAuditLog, GlobalAuditLog } from '../utils/auditLog';
 import { pushInAppMessage } from '../utils/inAppMessages';
@@ -18,6 +20,7 @@ import {
   validateScheduleSlot,
   WorkScheduleSlot,
 } from '../utils/quotaCommonJobRequest';
+import { AuthorizedParty, readAuthorizedParties } from '../utils/authorizedParties';
 
 const QUOTA_APP_CACHE_KEY = 'quota_application_records_v1';
 const QUOTA_APP_DRAFT_KEY = 'quota_application_drafts_v1';
@@ -48,6 +51,18 @@ type RenewJobAdjustment = {
   work_addresses: string[];
 };
 
+type Appendix4Row = {
+  id: string;
+  approval_no: string;
+  quota_seq: string;
+  post_name: string;
+  worker_name: string;
+  contract_start: string;
+  contract_end: string;
+  contract_end_manual: boolean;
+  renewal_quota: boolean;
+};
+
 type QuotaApplicationForm = {
   application_no: string;
   submitted_at: string;
@@ -68,10 +83,30 @@ type QuotaApplicationForm = {
   contact_email: string;
   renew_old_file_no: string;
   renew_quota_serial_no: string;
+  renew_quota_serial_nos: string[];
+  renew_use_old_approval_details: boolean;
   renew_job_adjustments: RenewJobAdjustment[];
   appendix2_latest_cutoff_date: string;
   appendix2_fulltime_local_total: string;
   appendix2_same_duty_local_counts: Record<string, string>;
+  appendix3a_profile_id: string;
+  appendix3a_third_party_company_name: string;
+  appendix3a_third_party_company_br_number: string;
+  appendix3a_name: string;
+  appendix3a_gender: '' | 'male' | 'female';
+  appendix3a_email: string;
+  appendix3a_id_doc_type: '' | 'HKID' | 'OTHER';
+  appendix3a_id_doc_number: string;
+  appendix3a_no_authorization: boolean;
+  appendix3b_company_name: string;
+  appendix3b_company_br_number: string;
+  appendix3b_name: string;
+  appendix3b_gender: '' | 'male' | 'female';
+  appendix3b_email: string;
+  appendix3b_id_doc_type: '' | 'HKID' | 'OTHER';
+  appendix3b_id_doc_number: string;
+  appendix3b_no_authorization: boolean;
+  appendix4_rows: Appendix4Row[];
   common_jobs: CommonJobRow[];
   common_job_new_requests: CommonJobNewRequest[];
 };
@@ -153,10 +188,30 @@ const initialForm = (): QuotaApplicationForm => ({
   contact_email: '',
   renew_old_file_no: '',
   renew_quota_serial_no: '',
+  renew_quota_serial_nos: [],
+  renew_use_old_approval_details: false,
   renew_job_adjustments: [emptyRenewJobAdjustment()],
   appendix2_latest_cutoff_date: '',
   appendix2_fulltime_local_total: '',
   appendix2_same_duty_local_counts: {},
+  appendix3a_profile_id: '',
+  appendix3a_third_party_company_name: '',
+  appendix3a_third_party_company_br_number: '',
+  appendix3a_name: '',
+  appendix3a_gender: '',
+  appendix3a_email: '',
+  appendix3a_id_doc_type: '',
+  appendix3a_id_doc_number: '',
+  appendix3a_no_authorization: false,
+  appendix3b_company_name: '',
+  appendix3b_company_br_number: '',
+  appendix3b_name: '',
+  appendix3b_gender: '',
+  appendix3b_email: '',
+  appendix3b_id_doc_type: '',
+  appendix3b_id_doc_number: '',
+  appendix3b_no_authorization: false,
+  appendix4_rows: buildInitialAppendix4Rows(1),
   common_jobs: [],
   common_job_new_requests: [],
 });
@@ -177,6 +232,83 @@ const emptyRenewJobAdjustment = (): RenewJobAdjustment => ({
   schedules: [{ start: '', end: '' }],
   work_addresses: [''],
 });
+
+const emptyAppendix4Row = (): Appendix4Row => ({
+  id: `apx4-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  approval_no: '',
+  quota_seq: '',
+  post_name: '',
+  worker_name: '',
+  contract_start: '',
+  contract_end: '',
+  contract_end_manual: false,
+  renewal_quota: false,
+});
+
+const buildInitialAppendix4Rows = (count = 1): Appendix4Row[] =>
+  Array.from({ length: count }, () => emptyAppendix4Row());
+
+const normalizeAppendix4Rows = (rows: any): Appendix4Row[] => {
+  if (!Array.isArray(rows)) return buildInitialAppendix4Rows(1);
+  const mapped: Appendix4Row[] = rows.map((x: any, idx: number) => ({
+    id: String(x?.id || `apx4-${Date.now()}-${idx}`),
+    approval_no: String(x?.approval_no || ''),
+    quota_seq: String(x?.quota_seq || ''),
+    post_name: String(x?.post_name || ''),
+    worker_name: String(x?.worker_name || ''),
+    contract_start: String(x?.contract_start || ''),
+    contract_end: String(x?.contract_end || ''),
+    contract_end_manual: Boolean(x?.contract_end_manual),
+    renewal_quota: Boolean(x?.renewal_quota),
+  }));
+  const isRowEmpty = (r: Appendix4Row) =>
+    !String(r.approval_no || '').trim() &&
+    !String(r.quota_seq || '').trim() &&
+    !String(r.post_name || '').trim() &&
+    !String(r.worker_name || '').trim() &&
+    !String(r.contract_start || '').trim() &&
+    !String(r.contract_end || '').trim() &&
+    !Boolean(r.renewal_quota);
+  const nonEmpty = mapped.filter((r) => !isRowEmpty(r));
+  return nonEmpty.length > 0 ? nonEmpty : buildInitialAppendix4Rows(1);
+};
+
+const parseDateYMD = (value: string) => {
+  const m = String(value || '').trim().match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mon = Number(m[2]);
+  const d = Number(m[3]);
+  const dt = new Date(y, mon - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== mon - 1 || dt.getDate() !== d) return null;
+  return dt;
+};
+
+const toYmdSlash = (d: Date) =>
+  `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`;
+
+const addMonthsToYmdSlash = (startYmd: string, months: number) => {
+  const dt = parseDateYMD(startYmd);
+  if (!dt) return '';
+  const next = new Date(dt);
+  next.setMonth(next.getMonth() + months);
+  return toYmdSlash(next);
+};
+
+const normalizeSeq4OrEmpty = (raw: any): string => {
+  const digits = String(raw || '').replace(/[^\d]/g, '').slice(-4);
+  return digits ? digits.padStart(4, '0') : '';
+};
+
+const readWorkerProfilesMap = (): Record<string, any> => {
+  try {
+    const raw = localStorage.getItem('worker_profiles_v1');
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+};
 
 const formatDateInputYYYYMMDD = (raw: string) => {
   const digits = String(raw || '').replace(/[^\d]/g, '').slice(0, 8);
@@ -202,19 +334,103 @@ const QuotaApplications: React.FC = () => {
   const [pageNotice, setPageNotice] = useState<{ type: 'success' | 'warning'; text: string } | null>(null);
   const [savingDraft, setSavingDraft] = useState(false);
   const [employers, setEmployers] = useState<Employer[]>([]);
+  const [approvals, setApprovals] = useState<Approval[]>([]);
+  const [workers, setWorkers] = useState<Worker[]>([]);
+  const [authorizedParties, setAuthorizedParties] = useState<AuthorizedParty[]>([]);
   const [employerQuery, setEmployerQuery] = useState('');
   const [employerDropdownOpen, setEmployerDropdownOpen] = useState(false);
+  const [renewOldFileQuery, setRenewOldFileQuery] = useState('');
+  const [renewOldFileDropdownOpen, setRenewOldFileDropdownOpen] = useState(false);
+  const [renewQuotaSeqQuery, setRenewQuotaSeqQuery] = useState('');
   const [jobSelectorQuery, setJobSelectorQuery] = useState('');
   const [jobSelectorOpen, setJobSelectorOpen] = useState(false);
   const [activeNewJobIndex, setActiveNewJobIndex] = useState(0);
   const [collapsedNewJobKeys, setCollapsedNewJobKeys] = useState<string[]>([]);
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const employerBlurTimer = useRef<number | null>(null);
+  const renewOldFileBlurTimer = useRef<number | null>(null);
   const jobSelectorBlurTimer = useRef<number | null>(null);
   const noticeTimerRef = useRef<number | null>(null);
   const pageNoticeTimerRef = useRef<number | null>(null);
   const identity = getAuthIdentity();
   const isCurrentUserSuperAdmin = isSuperAdmin();
+
+  const selectedAppendix3aProfile = useMemo(
+    () => authorizedParties.find((x) => x.id === form.appendix3a_profile_id),
+    [authorizedParties, form.appendix3a_profile_id]
+  );
+  const availableApprovalNumbers = useMemo(() => {
+    const currentEmployerId = Number(form.employer_id || 0);
+    const currentEmployerName = String(form.employer_name_cn || form.employer_name_en || '').trim().toLowerCase();
+    const scoped = approvals.filter((a) => {
+      const aid = Number((a as any).employer_id || 0);
+      const aname = String((a as any).employer_name || '').trim().toLowerCase();
+      if (currentEmployerId && aid) return aid === currentEmployerId;
+      if (currentEmployerName && aname) return aname === currentEmployerName;
+      return true;
+    });
+    return Array.from(
+      new Set(
+        scoped
+          .map((a) => String(a.approval_number || '').trim().toUpperCase())
+          .filter(Boolean)
+      )
+    );
+  }, [approvals, form.employer_id, form.employer_name_cn, form.employer_name_en]);
+  const appendix4QuotaByApprovalNo = useMemo(() => {
+    const map: Record<string, { seq: string; post_name: string }[]> = {};
+    for (const a of approvals) {
+      const approvalNo = String((a as any).approval_number || '').trim().toUpperCase();
+      const approvalId = Number((a as any).id || 0);
+      if (!approvalNo || !approvalId) continue;
+      const details = getApprovalQuotaDetails(approvalId);
+      if (!Array.isArray(details) || details.length === 0) continue;
+      const rows = details
+        .map((d) => ({
+          seq: normalizeSeq4OrEmpty((d as any).quota_seq),
+          post_name: String((d as any).job_title || '').trim(),
+        }))
+        .filter((x) => Boolean(x.seq));
+      if (rows.length > 0) map[approvalNo] = rows;
+    }
+    return map;
+  }, [approvals]);
+  const approvalNoById = useMemo(() => {
+    const map: Record<number, string> = {};
+    for (const a of approvals) {
+      const id = Number((a as any).id || 0);
+      const no = String((a as any).approval_number || '').trim().toUpperCase();
+      if (id && no) map[id] = no;
+    }
+    return map;
+  }, [approvals]);
+  const workerProfilesById = useMemo(() => readWorkerProfilesMap(), [workers]);
+  const appendix4WorkersByApprovalNo = useMemo(() => {
+    const map: Record<string, { seq: string; post_name: string; worker_name: string }[]> = {};
+    for (const w of workers) {
+      const profile = workerProfilesById[String((w as any).id || '')] || {};
+      const approvalId = Number((w as any).approval_id || profile.approval_id || 0);
+      const approvalNo =
+        String((w as any).approval_number || '').trim().toUpperCase() ||
+        String(profile.approval_number || '').trim().toUpperCase() ||
+        String(approvalNoById[approvalId] || '').trim().toUpperCase();
+      if (!approvalNo) continue;
+      const seq = normalizeSeq4OrEmpty((w as any).quota_seq || profile.quota_seq);
+      if (!seq) continue;
+      const item = {
+        seq,
+        post_name: String((w as any).position_name || '').trim(),
+        worker_name: String((w as any).labour_name || (w as any).worker_name || (w as any).name || '').trim(),
+      };
+      map[approvalNo] = map[approvalNo] || [];
+      const duplicate = map[approvalNo].some((x) => x.seq === seq);
+      if (!duplicate) map[approvalNo].push(item);
+    }
+    for (const key of Object.keys(map)) {
+      map[key] = map[key].sort((a, b) => a.seq.localeCompare(b.seq));
+    }
+    return map;
+  }, [workers, approvalNoById, workerProfilesById]);
 
   const getDraftStorageKey = (id?: string | null) => (id ? `record:${id}` : 'new');
 
@@ -285,6 +501,7 @@ const QuotaApplications: React.FC = () => {
       if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
       if (pageNoticeTimerRef.current) window.clearTimeout(pageNoticeTimerRef.current);
       if (employerBlurTimer.current) window.clearTimeout(employerBlurTimer.current);
+      if (renewOldFileBlurTimer.current) window.clearTimeout(renewOldFileBlurTimer.current);
       if (jobSelectorBlurTimer.current) window.clearTimeout(jobSelectorBlurTimer.current);
     };
   }, []);
@@ -315,6 +532,20 @@ const QuotaApplications: React.FC = () => {
     setEmployerDropdownOpen(false);
   };
 
+  const applyAppendix3aProfile = (profile: AuthorizedParty) => {
+    setForm((prev) => ({
+      ...prev,
+      appendix3a_profile_id: profile.id,
+      appendix3a_third_party_company_name: String(profile.company_name || ''),
+      appendix3a_third_party_company_br_number: String(profile.business_registration_number || '').replace(/[^\d]/g, '').slice(0, 8),
+      appendix3a_name: String(profile.representative_name || ''),
+      appendix3a_gender: profile.gender === 'female' ? 'female' : 'male',
+      appendix3a_email: String(profile.email || ''),
+      appendix3a_id_doc_type: profile.id_type === 'OTHER' ? 'OTHER' : 'HKID',
+      appendix3a_id_doc_number: String(profile.id_number || ''),
+    }));
+  };
+
   useEffect(() => {
     setRecords(readRecords());
     const loginMarkKey = `quota_login_mark_${identity.userId || 'anon'}`;
@@ -326,6 +557,9 @@ const QuotaApplications: React.FC = () => {
       sessionStorage.setItem(loginMarkKey, '1');
     }
     getEmployers({ limit: 1000 }).then(setEmployers).catch(() => setEmployers([]));
+    getApprovals().then(setApprovals).catch(() => setApprovals([]));
+    getWorkers({ limit: 5000 }).then(setWorkers).catch(() => setWorkers([]));
+    setAuthorizedParties(readAuthorizedParties());
   }, []);
 
   const filteredEmployers = useMemo(() => {
@@ -391,6 +625,18 @@ const QuotaApplications: React.FC = () => {
     () => Number(String(form.appendix2_fulltime_local_total || '').trim() || 0),
     [form.appendix2_fulltime_local_total]
   );
+  const appendix2DutyHasInput = useMemo(
+    () =>
+      appendix2NamedJobs.some((job) => {
+        const raw = String(form.appendix2_same_duty_local_counts?.[job.id] || '').trim();
+        return /^\d+$/.test(raw);
+      }),
+    [appendix2NamedJobs, form.appendix2_same_duty_local_counts]
+  );
+  const appendix2TotalHasInput = useMemo(
+    () => /^\d+$/.test(String(form.appendix2_fulltime_local_total || '').trim()),
+    [form.appendix2_fulltime_local_total]
+  );
   const appendix2Remaining = useMemo(() => appendix2LocalTotal - appendix2DutySum, [appendix2LocalTotal, appendix2DutySum]);
   const appendix2OverLimit = useMemo(
     () => /^\d+$/.test(String(form.appendix2_fulltime_local_total || '').trim()) && appendix2DutySum > appendix2LocalTotal,
@@ -398,6 +644,46 @@ const QuotaApplications: React.FC = () => {
   );
   const maxSelectableNewJobs = commonJobOptions.length;
   const canAddMoreNewJobs = commonJobNewRequests.length < maxSelectableNewJobs;
+  const renewOldApprovalOptions = useMemo(() => {
+    const currentEmployerId = Number(form.employer_id || 0);
+    const currentEmployerName = String(form.employer_name_cn || form.employer_name_en || '').trim().toLowerCase();
+    const scoped = approvals.filter((a) => {
+      const aid = Number((a as any).employer_id || 0);
+      const aname = String((a as any).employer_name || '').trim().toLowerCase();
+      if (currentEmployerId && aid) return aid === currentEmployerId;
+      if (currentEmployerName && aname) return aname === currentEmployerName;
+      return true;
+    });
+    return scoped
+      .map((a) => ({ id: Number((a as any).id || 0), no: String(a.approval_number || '').trim().toUpperCase() }))
+      .filter((x) => x.id > 0 && x.no)
+      .sort((a, b) => a.no.localeCompare(b.no));
+  }, [approvals, form.employer_id, form.employer_name_cn, form.employer_name_en]);
+  const renewSelectedApprovalId = useMemo(() => {
+    const no = String(form.renew_old_file_no || '').trim().toUpperCase();
+    if (!no) return 0;
+    return renewOldApprovalOptions.find((x) => x.no === no)?.id || 0;
+  }, [form.renew_old_file_no, renewOldApprovalOptions]);
+  const renewOldApprovalQuotaOptions = useMemo(() => {
+    if (!renewSelectedApprovalId) return [] as Array<{ seq: string; job_title: string; work_location: string }>;
+    return getApprovalQuotaDetails(renewSelectedApprovalId)
+      .map((q) => ({
+        seq: normalizeSeq4OrEmpty((q as any).quota_seq),
+        job_title: String((q as any).job_title || '').trim(),
+        work_location: String((q as any).work_location || '').trim(),
+      }))
+      .filter((x) => Boolean(x.seq));
+  }, [renewSelectedApprovalId]);
+  const filteredRenewQuotaSeqOptions = useMemo(() => {
+    const q = String(renewQuotaSeqQuery || '').trim();
+    if (!q) return renewOldApprovalQuotaOptions;
+    return renewOldApprovalQuotaOptions.filter((x) => x.seq.includes(q));
+  }, [renewOldApprovalQuotaOptions, renewQuotaSeqQuery]);
+  const filteredRenewOldApprovalOptions = useMemo(() => {
+    const q = String(renewOldFileQuery || '').trim().toLowerCase();
+    if (!q) return renewOldApprovalOptions.slice(0, 50);
+    return renewOldApprovalOptions.filter((x) => x.no.toLowerCase().includes(q)).slice(0, 50);
+  }, [renewOldApprovalOptions, renewOldFileQuery]);
 
   const visibleRecords = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -415,6 +701,7 @@ const QuotaApplications: React.FC = () => {
     return SECTION_LABELS.filter((x) => {
       if (isLimitedCompany && x.key === 'appendix-1') return false;
       if (isNewOnly && x.key === 'renew-jobs') return false;
+      if (isNewOnly && x.key === 'appendix-4') return false;
       return true;
     });
   }, [form.business_mode, form.category]);
@@ -435,18 +722,37 @@ const QuotaApplications: React.FC = () => {
     if (activeSection === 'renew-jobs' && form.category === '新申請') {
       setActiveSection('appendix-2');
     }
+    if (activeSection === 'appendix-4' && form.category === '新申請') {
+      setActiveSection('appendix-5');
+    }
   }, [activeSection, form.business_mode, form.category]);
 
   useEffect(() => {
     if (form.category !== '新申請') return;
     setSectionDone((prev) => ({ ...prev, 'renew-jobs': true }));
+    setRenewOldFileQuery('');
+    setRenewOldFileDropdownOpen(false);
     setForm((prev) => ({
       ...prev,
       renew_old_file_no: '',
       renew_quota_serial_no: '',
+      renew_quota_serial_nos: [],
+      renew_use_old_approval_details: false,
       renew_job_adjustments: [emptyRenewJobAdjustment()],
     }));
   }, [form.category]);
+
+  useEffect(() => {
+    const allowed = new Set(renewOldApprovalQuotaOptions.map((x) => x.seq));
+    const current = Array.isArray(form.renew_quota_serial_nos) ? form.renew_quota_serial_nos : [];
+    const filtered = current.filter((x) => allowed.has(x));
+    if (filtered.length === current.length) return;
+    setForm((prev) => ({
+      ...prev,
+      renew_quota_serial_nos: filtered,
+      renew_quota_serial_no: filtered.join(','),
+    }));
+  }, [renewOldApprovalQuotaOptions, form.renew_quota_serial_nos]);
 
   const applicantErrors = useMemo(() => {
     const errs: string[] = [];
@@ -487,23 +793,24 @@ const QuotaApplications: React.FC = () => {
       const adjustments = Array.isArray(form.renew_job_adjustments) ? form.renew_job_adjustments : [];
       const renewBasicOk =
         String(form.renew_old_file_no || '').trim() &&
-        String(form.renew_quota_serial_no || '').trim();
+        (Array.isArray(form.renew_quota_serial_nos) ? form.renew_quota_serial_nos.length > 0 : false);
       const renewAdjustmentsOk =
-        adjustments.length > 0 &&
-        adjustments.every((row) => {
-          const weeklyOk = /^\d+$/.test(String(row.weekly_working_days || '').trim());
-          const shiftOk = row.shift_required === 'NO' || row.shift_required === 'YES';
-          const schedules = Array.isArray(row.schedules) ? row.schedules : [];
-          const scheduleCountOk =
-            row.shift_required === 'YES'
-              ? schedules.length >= 1 && schedules.length <= 5
-              : schedules.length === 1;
-          const scheduleValueOk = schedules.every((slot) => validateScheduleSlot(slot).valid);
-          const addresses = Array.isArray(row.work_addresses) ? row.work_addresses : [];
-          const addressCountOk = addresses.length >= 1 && addresses.length <= 3;
-          const addressValueOk = addresses.some((x) => String(x || '').trim());
-          return weeklyOk && shiftOk && scheduleCountOk && scheduleValueOk && addressCountOk && addressValueOk;
-        });
+        form.renew_use_old_approval_details ||
+        (adjustments.length > 0 &&
+          adjustments.every((row) => {
+            const weeklyOk = /^\d+$/.test(String(row.weekly_working_days || '').trim());
+            const shiftOk = row.shift_required === 'NO' || row.shift_required === 'YES';
+            const schedules = Array.isArray(row.schedules) ? row.schedules : [];
+            const scheduleCountOk =
+              row.shift_required === 'YES'
+                ? schedules.length >= 1 && schedules.length <= 5
+                : schedules.length === 1;
+            const scheduleValueOk = schedules.every((slot) => validateScheduleSlot(slot).valid);
+            const addresses = Array.isArray(row.work_addresses) ? row.work_addresses : [];
+            const addressCountOk = addresses.length >= 1 && addresses.length <= 3;
+            const addressValueOk = addresses.some((x) => String(x || '').trim());
+            return weeklyOk && shiftOk && scheduleCountOk && scheduleValueOk && addressCountOk && addressValueOk;
+          }));
       map['renew-jobs'] = Boolean(renewBasicOk && renewAdjustmentsOk);
     }
     const dateRaw = String(form.appendix2_latest_cutoff_date || '').trim();
@@ -526,8 +833,62 @@ const QuotaApplications: React.FC = () => {
       sameDutyOk &&
       appendix2DutySum <= Number(String(form.appendix2_fulltime_local_total || '').trim() || 0);
     map['appendix-2'] = dateOk && localTotalOk && sameDutyOk && totalConstraintOk;
+    const appendix3aCompanyOk = String(form.appendix3a_third_party_company_name || '').trim().length > 0;
+    const appendix3aBrOk = /^\d{1,8}$/.test(String(form.appendix3a_third_party_company_br_number || '').trim());
+    const appendix3aNameOk = String(form.appendix3a_name || '').trim().length > 0;
+    const appendix3aGenderOk = form.appendix3a_gender === 'male' || form.appendix3a_gender === 'female';
+    const appendix3aEmailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(form.appendix3a_email || '').trim());
+    const appendix3aDocTypeOk = form.appendix3a_id_doc_type === 'HKID' || form.appendix3a_id_doc_type === 'OTHER';
+    const appendix3aDocNoOk = String(form.appendix3a_id_doc_number || '').trim().length > 0;
+    const appendix3aFilledOk =
+      appendix3aCompanyOk &&
+      appendix3aBrOk &&
+      appendix3aNameOk &&
+      appendix3aGenderOk &&
+      appendix3aEmailOk &&
+      appendix3aDocTypeOk &&
+      appendix3aDocNoOk;
+    map['appendix-3a'] = form.appendix3a_no_authorization ? true : appendix3aFilledOk;
+    const appendix3bCompanyOk = String(form.appendix3b_company_name || '').trim().length > 0;
+    const appendix3bBrOk = /^\d{1,8}$/.test(String(form.appendix3b_company_br_number || '').trim());
+    const appendix3bNameOk = String(form.appendix3b_name || '').trim().length > 0;
+    const appendix3bGenderOk = form.appendix3b_gender === 'male' || form.appendix3b_gender === 'female';
+    const appendix3bEmailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(form.appendix3b_email || '').trim());
+    const appendix3bDocTypeOk = form.appendix3b_id_doc_type === 'HKID' || form.appendix3b_id_doc_type === 'OTHER';
+    const appendix3bDocNoOk = String(form.appendix3b_id_doc_number || '').trim().length > 0;
+    const appendix3bFilledOk =
+      appendix3bCompanyOk &&
+      appendix3bBrOk &&
+      appendix3bNameOk &&
+      appendix3bGenderOk &&
+      appendix3bEmailOk &&
+      appendix3bDocTypeOk &&
+      appendix3bDocNoOk;
+    map['appendix-3b'] = form.appendix3b_no_authorization ? true : appendix3bFilledOk;
+    const appendix4Rows = Array.isArray(form.appendix4_rows) ? form.appendix4_rows : [];
+    const isAppendix4RowFilled = (row: Appendix4Row) =>
+      [
+        row.approval_no,
+        row.quota_seq,
+        row.post_name,
+        row.worker_name,
+        row.contract_start,
+        row.contract_end,
+      ].some((x) => String(x || '').trim().length > 0);
+    const isAppendix4RowValid = (row: Appendix4Row) => {
+      const approvalOk = String(row.approval_no || '').trim().length > 0;
+      const quotaSeqOk = String(row.quota_seq || '').trim().length > 0;
+      const postOk = String(row.post_name || '').trim().length > 0;
+      const workerOk = String(row.worker_name || '').trim().length > 0;
+      const startOk = Boolean(parseDateYMD(String(row.contract_start || '').trim()));
+      const endOk = Boolean(parseDateYMD(String(row.contract_end || '').trim()));
+      return approvalOk && quotaSeqOk && postOk && workerOk && startOk && endOk;
+    };
+    const filledRows = appendix4Rows.filter(isAppendix4RowFilled);
+    const appendix4Ok = filledRows.length > 0 && filledRows.every(isAppendix4RowValid);
+    map['appendix-4'] = appendix4Ok;
     return map;
-  }, [sectionDone, applicantErrors, form.common_jobs, commonJobNewRequests, form.category, form.renew_job_adjustments, form.renew_old_file_no, form.renew_quota_serial_no, form.appendix2_latest_cutoff_date, form.appendix2_fulltime_local_total, form.appendix2_same_duty_local_counts, appendix2NamedJobs, appendix2DutySum]);
+  }, [sectionDone, applicantErrors, form.common_jobs, commonJobNewRequests, form.category, form.renew_job_adjustments, form.renew_old_file_no, form.renew_quota_serial_no, form.renew_quota_serial_nos, form.renew_use_old_approval_details, form.appendix2_latest_cutoff_date, form.appendix2_fulltime_local_total, form.appendix2_same_duty_local_counts, form.appendix3a_third_party_company_name, form.appendix3a_third_party_company_br_number, form.appendix3a_name, form.appendix3a_gender, form.appendix3a_email, form.appendix3a_id_doc_type, form.appendix3a_id_doc_number, form.appendix3a_no_authorization, form.appendix3b_company_name, form.appendix3b_company_br_number, form.appendix3b_name, form.appendix3b_gender, form.appendix3b_email, form.appendix3b_id_doc_type, form.appendix3b_id_doc_number, form.appendix3b_no_authorization, form.appendix4_rows, appendix2NamedJobs, appendix2DutySum]);
 
   const allSectionsCompleted = useMemo(
     () => visibleSections.every((s) => Boolean(computedSectionDone[s.key])),
@@ -542,11 +903,28 @@ const QuotaApplications: React.FC = () => {
       return `職位筆數=${form.common_jobs.length}`;
     }
     if (section === 'renew-jobs') {
-      return `舊檔案編號=${form.renew_old_file_no || '-'}，續約職位調整=${form.renew_job_adjustments.length} 筆`;
+      return `舊檔案編號=${form.renew_old_file_no || '-'}，續約配額=${(form.renew_quota_serial_nos || []).length} 項，沿用舊批文詳情=${form.renew_use_old_approval_details ? '是' : '否'}`;
     }
     if (section === 'appendix-2') {
       const namedJobs = form.common_jobs.filter((j) => String(j.post_name || '').trim());
       return `截止日期=${form.appendix2_latest_cutoff_date || '-'}，本地僱員=${form.appendix2_fulltime_local_total || '-'}，職位=${namedJobs.length} 項`;
+    }
+    if (section === 'appendix-3a') {
+      return form.appendix3a_no_authorization
+        ? '已設定不作授權'
+        : `第三方公司=${form.appendix3a_third_party_company_name || '-'}，姓名=${form.appendix3a_name || '-'}，電郵=${form.appendix3a_email || '-'}`;
+    }
+    if (section === 'appendix-3b') {
+      return form.appendix3b_no_authorization
+        ? '已設定不作授權'
+        : `公司員工=${form.appendix3b_name || '-'}，公司=${form.appendix3b_company_name || '-'}，電郵=${form.appendix3b_email || '-'}`;
+    }
+    if (section === 'appendix-4') {
+      const rows = Array.isArray(form.appendix4_rows) ? form.appendix4_rows : [];
+      const filled = rows.filter((x) =>
+        [x.approval_no, x.post_name, x.worker_name, x.contract_start, x.contract_end].some((v) => String(v || '').trim())
+      );
+      return `已填勞工資料=${filled.length} 筆`;
     }
     return `${SECTION_LABELS.find((x) => x.key === section)?.label || section}已有內容`;
   };
@@ -998,6 +1376,9 @@ const QuotaApplications: React.FC = () => {
     setSelectedId(null);
     setEmployerQuery('');
     setEmployerDropdownOpen(false);
+    setRenewOldFileQuery('');
+    setRenewOldFileDropdownOpen(false);
+    setRenewQuotaSeqQuery('');
     setJobSelectorQuery('');
     setJobSelectorOpen(false);
     setActiveNewJobIndex(0);
@@ -1010,6 +1391,7 @@ const QuotaApplications: React.FC = () => {
     setSectionDone({});
     setActiveSection('applicant');
     setModalNotice(null);
+    setAuthorizedParties(readAuthorizedParties());
     setIsModalOpen(true);
   };
 
@@ -1018,6 +1400,9 @@ const QuotaApplications: React.FC = () => {
     setSelectedId(row.id);
     setEmployerQuery(String(row.employer_name_cn || row.employer_name_en || '').trim());
     setEmployerDropdownOpen(false);
+    setRenewOldFileQuery(String((row as any).renew_old_file_no || '').toUpperCase());
+    setRenewOldFileDropdownOpen(false);
+    setRenewQuotaSeqQuery('');
     setJobSelectorQuery('');
     setJobSelectorOpen(false);
     setActiveNewJobIndex(0);
@@ -1043,6 +1428,13 @@ const QuotaApplications: React.FC = () => {
       contact_email: row.contact_email,
       renew_old_file_no: String((row as any).renew_old_file_no || ''),
       renew_quota_serial_no: String((row as any).renew_quota_serial_no || ''),
+      renew_quota_serial_nos: Array.isArray((row as any).renew_quota_serial_nos)
+        ? (row as any).renew_quota_serial_nos.map((x: any) => normalizeSeq4OrEmpty(x)).filter(Boolean)
+        : String((row as any).renew_quota_serial_no || '')
+            .split(',')
+            .map((x) => normalizeSeq4OrEmpty(x))
+            .filter(Boolean),
+      renew_use_old_approval_details: Boolean((row as any).renew_use_old_approval_details),
       renew_job_adjustments: Array.isArray((row as any).renew_job_adjustments)
         ? (row as any).renew_job_adjustments.map((x: any, idx: number) => ({
             id: String(x?.id || `renew-${Date.now()}-${idx}`),
@@ -1071,6 +1463,36 @@ const QuotaApplications: React.FC = () => {
               ])
             )
           : {},
+      appendix3a_profile_id: String((row as any).appendix3a_profile_id || ''),
+      appendix3a_third_party_company_name: String((row as any).appendix3a_third_party_company_name || ''),
+      appendix3a_third_party_company_br_number: String((row as any).appendix3a_third_party_company_br_number || ''),
+      appendix3a_name: String((row as any).appendix3a_name || ''),
+      appendix3a_gender:
+        (row as any).appendix3a_gender === 'male' || (row as any).appendix3a_gender === 'female'
+          ? (row as any).appendix3a_gender
+          : '',
+      appendix3a_email: String((row as any).appendix3a_email || ''),
+      appendix3a_id_doc_type:
+        (row as any).appendix3a_id_doc_type === 'HKID' || (row as any).appendix3a_id_doc_type === 'OTHER'
+          ? (row as any).appendix3a_id_doc_type
+          : '',
+      appendix3a_id_doc_number: String((row as any).appendix3a_id_doc_number || ''),
+      appendix3a_no_authorization: Boolean((row as any).appendix3a_no_authorization),
+      appendix3b_company_name: String((row as any).appendix3b_company_name || ''),
+      appendix3b_company_br_number: String((row as any).appendix3b_company_br_number || ''),
+      appendix3b_name: String((row as any).appendix3b_name || ''),
+      appendix3b_gender:
+        (row as any).appendix3b_gender === 'male' || (row as any).appendix3b_gender === 'female'
+          ? (row as any).appendix3b_gender
+          : '',
+      appendix3b_email: String((row as any).appendix3b_email || ''),
+      appendix3b_id_doc_type:
+        (row as any).appendix3b_id_doc_type === 'HKID' || (row as any).appendix3b_id_doc_type === 'OTHER'
+          ? (row as any).appendix3b_id_doc_type
+          : '',
+      appendix3b_id_doc_number: String((row as any).appendix3b_id_doc_number || ''),
+      appendix3b_no_authorization: Boolean((row as any).appendix3b_no_authorization),
+      appendix4_rows: normalizeAppendix4Rows((row as any).appendix4_rows),
       common_jobs: Array.isArray((row as any).common_jobs)
         ? (row as any).common_jobs.map((j: any, idx: number) => ({
             id: String(j?.id || `job-${Date.now()}-${idx}`),
@@ -1093,19 +1515,25 @@ const QuotaApplications: React.FC = () => {
     const sourceForm: QuotaApplicationForm = {
       ...baseForm,
       ...sourceFormRaw,
+      renew_quota_serial_nos: Array.isArray(sourceFormRaw?.renew_quota_serial_nos)
+        ? sourceFormRaw.renew_quota_serial_nos.map((x) => normalizeSeq4OrEmpty(x)).filter(Boolean)
+        : baseForm.renew_quota_serial_nos,
       renew_job_adjustments: Array.isArray(sourceFormRaw?.renew_job_adjustments)
         ? sourceFormRaw.renew_job_adjustments
         : baseForm.renew_job_adjustments,
+      appendix4_rows: normalizeAppendix4Rows(sourceFormRaw?.appendix4_rows ?? baseForm.appendix4_rows),
       common_job_new_requests: Array.isArray(sourceFormRaw?.common_job_new_requests)
         ? sourceFormRaw.common_job_new_requests
         : baseForm.common_job_new_requests,
     };
     setForm(sourceForm);
+    setRenewOldFileQuery(String(sourceForm.renew_old_file_no || '').toUpperCase());
     const reqList = Array.isArray(sourceForm.common_job_new_requests) ? sourceForm.common_job_new_requests : [];
     setCollapsedNewJobKeys(reqList.map((req, idx) => getNewJobCardKey(req, idx)));
     setSectionDone(draft?.section_done || row.section_done || {});
     setActiveSection(draft?.last_active_section || 'applicant');
     setModalNotice(null);
+    setAuthorizedParties(readAuthorizedParties());
     appendLog({
       action: 'edit_continue',
       record_id: row.id,
@@ -1951,27 +2379,149 @@ const QuotaApplications: React.FC = () => {
             </div>
           ) : activeSection === 'renew-jobs' ? (
             <div className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">舊檔案編號 *</label>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">舊檔案編號（可搜尋）*</label>
+                <div className="relative">
                   <input
                     type="text"
-                    value={form.renew_old_file_no}
-                    onChange={(e) => setForm((prev) => ({ ...prev, renew_old_file_no: e.target.value }))}
+                    value={renewOldFileQuery}
+                    onChange={(e) => {
+                      const next = String(e.target.value || '').toUpperCase();
+                      setRenewOldFileQuery(next);
+                      setRenewOldFileDropdownOpen(true);
+                      setForm((prev) => ({
+                        ...prev,
+                        renew_old_file_no: next,
+                        renew_quota_serial_nos: [],
+                        renew_quota_serial_no: '',
+                      }));
+                      setRenewQuotaSeqQuery('');
+                    }}
+                    onFocus={() => {
+                      if (renewOldFileBlurTimer.current) window.clearTimeout(renewOldFileBlurTimer.current);
+                      setRenewOldFileDropdownOpen(true);
+                    }}
+                    onBlur={() => {
+                      renewOldFileBlurTimer.current = window.setTimeout(() => setRenewOldFileDropdownOpen(false), 150);
+                    }}
                     className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
-                    placeholder="請輸入舊檔案編號"
+                    placeholder="請選擇或輸入舊檔案編號"
                   />
+                  {renewOldFileDropdownOpen && (
+                    <div className="absolute z-30 mt-1 w-full bg-white border border-gray-200 rounded-apple-sm shadow-lg max-h-56 overflow-auto">
+                      {filteredRenewOldApprovalOptions.length > 0 ? (
+                        filteredRenewOldApprovalOptions.map((x) => (
+                          <button
+                            key={x.id}
+                            type="button"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => {
+                              setRenewOldFileQuery(x.no);
+                              setRenewOldFileDropdownOpen(false);
+                              setForm((prev) => ({
+                                ...prev,
+                                renew_old_file_no: x.no,
+                                renew_quota_serial_nos: [],
+                                renew_quota_serial_no: '',
+                              }));
+                              setRenewQuotaSeqQuery('');
+                            }}
+                            className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                          >
+                            {x.no}
+                          </button>
+                        ))
+                      ) : (
+                        <div className="px-4 py-2 text-sm text-gray-500">未找到匹配的舊檔案編號</div>
+                      )}
+                    </div>
+                  )}
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">是次續約配額序號 *</label>
+              </div>
+
+              <div className="border border-gray-200 rounded-apple-sm p-4 bg-white/40 space-y-3">
+                <div className="text-sm font-semibold text-gray-800">是次續約配額序號（可多選）*</div>
+                {String(form.renew_old_file_no || '').trim() ? (
+                  renewOldApprovalQuotaOptions.length > 0 ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={renewQuotaSeqQuery}
+                          onChange={(e) => setRenewQuotaSeqQuery(e.target.value.replace(/[^\d]/g, '').slice(0, 4))}
+                          placeholder="搜尋序號（例如 0001）"
+                          className="w-56 px-3 py-1.5 bg-white border border-gray-200 rounded-apple-sm text-sm"
+                        />
+                        <span className="text-xs text-gray-500">已選 {(form.renew_quota_serial_nos || []).length} 項</span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setForm((prev) => ({ ...prev, renew_quota_serial_nos: [], renew_quota_serial_no: '' }))
+                          }
+                          className="ml-auto px-2 py-1 text-xs rounded border border-gray-200 hover:bg-gray-50"
+                        >
+                          全清
+                        </button>
+                      </div>
+                      <div className="max-h-48 overflow-auto border border-gray-100 rounded-apple-sm bg-white p-2">
+                        <div className="flex flex-wrap gap-2">
+                          {filteredRenewQuotaSeqOptions.map((q) => {
+                            const checked = (form.renew_quota_serial_nos || []).includes(q.seq);
+                            return (
+                              <button
+                                key={q.seq}
+                                type="button"
+                                onClick={() =>
+                                  setForm((prev) => {
+                                    const set = new Set(Array.isArray(prev.renew_quota_serial_nos) ? prev.renew_quota_serial_nos : []);
+                                    if (set.has(q.seq)) set.delete(q.seq);
+                                    else set.add(q.seq);
+                                    const list = Array.from(set).sort();
+                                    return {
+                                      ...prev,
+                                      renew_quota_serial_nos: list,
+                                      renew_quota_serial_no: list.join(','),
+                                    };
+                                  })
+                                }
+                                className={clsx(
+                                  'px-2.5 py-1 text-xs rounded border transition-colors',
+                                  checked
+                                    ? 'bg-apple-blue text-white border-apple-blue'
+                                    : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                                )}
+                              >
+                                {q.seq}
+                              </button>
+                            );
+                          })}
+                          {filteredRenewQuotaSeqOptions.length === 0 && (
+                            <div className="text-xs text-gray-500 px-1 py-1">未找到匹配序號</div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-sm text-amber-700">該批文暫未找到配額明細，請先到「批文管理」補齊配額序號。</div>
+                  )
+                ) : (
+                  <div className="text-sm text-gray-500">請先選擇舊檔案編號，系統會顯示該批文下全部配額供勾選。</div>
+                )}
+              </div>
+
+              <div className="border border-gray-200 rounded-apple-sm p-4 bg-white/40">
+                <label className="inline-flex items-center gap-2 text-sm text-gray-700">
                   <input
-                    type="text"
-                    value={form.renew_quota_serial_no}
-                    onChange={(e) => setForm((prev) => ({ ...prev, renew_quota_serial_no: e.target.value }))}
-                    className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
-                    placeholder="請輸入是次續約配額序號"
+                    type="checkbox"
+                    checked={Boolean(form.renew_use_old_approval_details)}
+                    onChange={(e) => setForm((prev) => ({ ...prev, renew_use_old_approval_details: e.target.checked }))}
+                    className="h-4 w-4 rounded border-gray-300 text-apple-blue focus:ring-apple-blue"
                   />
-                </div>
+                  沿用舊批文詳情
+                </label>
+                {form.renew_use_old_approval_details && (
+                  <p className="text-xs text-gray-500 mt-2">已選擇沿用舊批文詳情，下方「續約調整職位詳情」不需填寫且不可編輯。</p>
+                )}
               </div>
 
               <div className="flex items-center justify-between">
@@ -1988,12 +2538,14 @@ const QuotaApplications: React.FC = () => {
                     }))
                   }
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-apple-blue text-white rounded-apple-sm text-sm hover:bg-blue-600 transition-colors"
+                  disabled={form.renew_use_old_approval_details}
                 >
                   <Plus className="w-4 h-4" />
                   新增調整職位
                 </button>
               </div>
 
+              <fieldset disabled={form.renew_use_old_approval_details} className={clsx(form.renew_use_old_approval_details && 'opacity-60')}>
               {(Array.isArray(form.renew_job_adjustments) ? form.renew_job_adjustments : []).map((item, idx) => (
                 <div key={item.id} className="border border-gray-200 rounded-apple-sm p-4 bg-white/40 space-y-4">
                   <div className="flex items-center justify-between">
@@ -2245,6 +2797,7 @@ const QuotaApplications: React.FC = () => {
                   </div>
                 </div>
               ))}
+              </fieldset>
             </div>
           ) : activeSection === 'appendix-2' ? (
             <div className="space-y-4">
@@ -2328,8 +2881,8 @@ const QuotaApplications: React.FC = () => {
                 </div>
                 <div className="mt-3 text-xs">
                   <span className="text-gray-600">
-                    目前合計：{appendix2DutySum}，總人數：{/^\d+$/.test(String(form.appendix2_fulltime_local_total || '').trim()) ? appendix2LocalTotal : '-'}，
-                    剩餘：{/^\d+$/.test(String(form.appendix2_fulltime_local_total || '').trim()) ? appendix2Remaining : '-'}
+                    目前合計：{appendix2DutyHasInput ? appendix2DutySum : '輸入人數'}，總人數：{appendix2TotalHasInput ? appendix2LocalTotal : '輸入人數'}，
+                    剩餘：{appendix2DutyHasInput && appendix2TotalHasInput ? appendix2Remaining : '輸入人數'}
                   </span>
                   {appendix2OverLimit && (
                     <p className="text-red-600 mt-1">
@@ -2337,6 +2890,574 @@ const QuotaApplications: React.FC = () => {
                     </p>
                   )}
                 </div>
+              </div>
+            </div>
+          ) : activeSection === 'appendix-3a' ? (
+            <div className="space-y-4">
+              <div className="border border-gray-200 rounded-apple-sm p-4 bg-white/40">
+                <div className="flex flex-col md:flex-row md:items-end gap-3">
+                  <div className="flex-1">
+                    <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">從「授權方管理」選擇後自動套入</label>
+                    <select
+                      value={form.appendix3a_profile_id}
+                      onChange={(e) => {
+                        const profileId = e.target.value;
+                        setForm((prev) => ({ ...prev, appendix3a_profile_id: profileId, appendix3a_no_authorization: false }));
+                        const picked = authorizedParties.find((x) => x.id === profileId);
+                        if (picked) applyAppendix3aProfile(picked);
+                      }}
+                      className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                      disabled={form.appendix3a_no_authorization}
+                    >
+                      <option value="">請選擇授權方資料</option>
+                      {authorizedParties.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.company_name} - {item.representative_name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setForm((prev) => ({
+                        ...prev,
+                        appendix3a_no_authorization: !prev.appendix3a_no_authorization,
+                        ...(prev.appendix3a_no_authorization
+                          ? {}
+                          : {
+                              appendix3a_profile_id: '',
+                              appendix3a_third_party_company_name: '',
+                              appendix3a_third_party_company_br_number: '',
+                              appendix3a_name: '',
+                              appendix3a_gender: '',
+                              appendix3a_email: '',
+                              appendix3a_id_doc_type: '',
+                              appendix3a_id_doc_number: '',
+                            }),
+                      }))
+                    }
+                    className={clsx(
+                      'h-10 px-4 rounded-apple-sm text-sm transition-colors',
+                      form.appendix3a_no_authorization
+                        ? 'bg-gray-100 text-gray-700 border border-gray-200 hover:bg-gray-200'
+                        : 'bg-apple-blue text-white hover:bg-blue-600'
+                    )}
+                  >
+                    {form.appendix3a_no_authorization ? '恢復填寫' : '不作授權'}
+                  </button>
+                </div>
+                {authorizedParties.length === 0 && !form.appendix3a_no_authorization && (
+                  <p className="text-xs text-amber-700 mt-2">
+                    尚未在「系統設定 / 授權方管理」新增資料，請先新增後再套入。
+                  </p>
+                )}
+                {form.appendix3a_no_authorization && (
+                  <p className="text-xs text-emerald-700 mt-2">已設定「不作授權」，本板塊自動視為完成。</p>
+                )}
+              </div>
+              <fieldset
+                disabled={form.appendix3a_no_authorization}
+                className={clsx('grid grid-cols-1 md:grid-cols-2 gap-4', form.appendix3a_no_authorization && 'opacity-60')}
+              >
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">第三方公司名稱 *</label>
+                  <input
+                    type="text"
+                    value={form.appendix3a_third_party_company_name}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        appendix3a_third_party_company_name: e.target.value,
+                      }))
+                    }
+                    className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">第三方公司商業登記號碼（最多8位）*</label>
+                  <input
+                    type="text"
+                    value={form.appendix3a_third_party_company_br_number}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        appendix3a_third_party_company_br_number: e.target.value.replace(/[^\d]/g, '').slice(0, 8),
+                      }))
+                    }
+                    className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">姓名 *</label>
+                  <input
+                    type="text"
+                    value={form.appendix3a_name}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        appendix3a_name: e.target.value,
+                      }))
+                    }
+                    className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">性別 *</label>
+                  <select
+                    value={form.appendix3a_gender}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        appendix3a_gender: e.target.value as '' | 'male' | 'female',
+                      }))
+                    }
+                    className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                  >
+                    <option value="">請選擇</option>
+                    <option value="male">男</option>
+                    <option value="female">女</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">電郵 *</label>
+                  <input
+                    type="email"
+                    value={form.appendix3a_email}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        appendix3a_email: e.target.value,
+                      }))
+                    }
+                    className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">身份證明文件 *</label>
+                  <select
+                    value={form.appendix3a_id_doc_type}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        appendix3a_id_doc_type: e.target.value as '' | 'HKID' | 'OTHER',
+                      }))
+                    }
+                    className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                  >
+                    <option value="">請選擇</option>
+                    <option value="HKID">香港身份證</option>
+                    <option value="OTHER">其他證據</option>
+                  </select>
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">證件號 *</label>
+                  <input
+                    type="text"
+                    value={form.appendix3a_id_doc_number}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        appendix3a_id_doc_number: e.target.value,
+                      }))
+                    }
+                    className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                  />
+                </div>
+              </fieldset>
+            </div>
+          ) : activeSection === 'appendix-3b' ? (
+            <div className="space-y-4">
+              <div className="border border-gray-200 rounded-apple-sm p-4 bg-white/40">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm text-gray-700">附頁三乙為申請企業員工授權資料，需手動填寫。</p>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setForm((prev) => ({
+                        ...prev,
+                        appendix3b_no_authorization: !prev.appendix3b_no_authorization,
+                        ...(prev.appendix3b_no_authorization
+                          ? {}
+                          : {
+                              appendix3b_company_name: '',
+                              appendix3b_company_br_number: '',
+                              appendix3b_name: '',
+                              appendix3b_gender: '',
+                              appendix3b_email: '',
+                              appendix3b_id_doc_type: '',
+                              appendix3b_id_doc_number: '',
+                            }),
+                      }))
+                    }
+                    className={clsx(
+                      'h-10 px-4 rounded-apple-sm text-sm transition-colors',
+                      form.appendix3b_no_authorization
+                        ? 'bg-gray-100 text-gray-700 border border-gray-200 hover:bg-gray-200'
+                        : 'bg-apple-blue text-white hover:bg-blue-600'
+                    )}
+                  >
+                    {form.appendix3b_no_authorization ? '恢復填寫' : '不作授權'}
+                  </button>
+                </div>
+                {form.appendix3b_no_authorization && (
+                  <p className="text-xs text-emerald-700 mt-2">已設定「不作授權」，本板塊自動視為完成。</p>
+                )}
+              </div>
+              <fieldset
+                disabled={form.appendix3b_no_authorization}
+                className={clsx('grid grid-cols-1 md:grid-cols-2 gap-4', form.appendix3b_no_authorization && 'opacity-60')}
+              >
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">申請企業名稱 *</label>
+                  <input
+                    type="text"
+                    value={form.appendix3b_company_name}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        appendix3b_company_name: e.target.value,
+                      }))
+                    }
+                    className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">申請企業商業登記號碼（最多8位）*</label>
+                  <input
+                    type="text"
+                    value={form.appendix3b_company_br_number}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        appendix3b_company_br_number: e.target.value.replace(/[^\d]/g, '').slice(0, 8),
+                      }))
+                    }
+                    className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">姓名 *</label>
+                  <input
+                    type="text"
+                    value={form.appendix3b_name}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        appendix3b_name: e.target.value,
+                      }))
+                    }
+                    className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">性別 *</label>
+                  <select
+                    value={form.appendix3b_gender}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        appendix3b_gender: e.target.value as '' | 'male' | 'female',
+                      }))
+                    }
+                    className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                  >
+                    <option value="">請選擇</option>
+                    <option value="male">男</option>
+                    <option value="female">女</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">電郵 *</label>
+                  <input
+                    type="email"
+                    value={form.appendix3b_email}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        appendix3b_email: e.target.value,
+                      }))
+                    }
+                    className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">身份證明文件 *</label>
+                  <select
+                    value={form.appendix3b_id_doc_type}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        appendix3b_id_doc_type: e.target.value as '' | 'HKID' | 'OTHER',
+                      }))
+                    }
+                    className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                  >
+                    <option value="">請選擇</option>
+                    <option value="HKID">香港身份證</option>
+                    <option value="OTHER">其他證據</option>
+                  </select>
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">證件號 *</label>
+                  <input
+                    type="text"
+                    value={form.appendix3b_id_doc_number}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        appendix3b_id_doc_number: e.target.value,
+                      }))
+                    }
+                    className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                  />
+                </div>
+              </fieldset>
+            </div>
+          ) : activeSection === 'appendix-4' ? (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="text-sm text-gray-600">
+                  已建立資料：{Array.isArray(form.appendix4_rows) ? form.appendix4_rows.length : 0} 筆（預設 1 筆）
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setForm((prev) => ({
+                      ...prev,
+                      appendix4_rows: [...(Array.isArray(prev.appendix4_rows) ? prev.appendix4_rows : []), emptyAppendix4Row()],
+                    }))
+                  }
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-apple-blue text-white rounded-apple-sm text-sm hover:bg-blue-600 transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  增加
+                </button>
+              </div>
+              <div className="space-y-3">
+                {(Array.isArray(form.appendix4_rows) ? form.appendix4_rows : []).map((row, idx) => (
+                  <div key={row.id} className="border border-gray-200 rounded-apple-sm p-4 bg-white/40">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="text-sm font-semibold text-gray-800">數據 {idx + 1}</div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setForm((prev) => {
+                            const list = Array.isArray(prev.appendix4_rows) ? prev.appendix4_rows : [];
+                            if (list.length <= 1) return prev;
+                            return { ...prev, appendix4_rows: list.filter((x) => x.id !== row.id) };
+                          })
+                        }
+                        className="text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 p-2 rounded-full transition-colors disabled:opacity-50"
+                        disabled={(Array.isArray(form.appendix4_rows) ? form.appendix4_rows : []).length <= 1}
+                        title="刪除"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {(() => {
+                        const normalizedPostName = String(row.post_name || '').trim().toLowerCase();
+                        const canSelectRenewal = Boolean(
+                          normalizedPostName &&
+                            form.common_jobs.some((j) => String(j.post_name || '').trim().toLowerCase() === normalizedPostName)
+                        );
+                        return (
+                          <>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">批文編號 *</label>
+                        <select
+                          value={row.approval_no}
+                          onChange={(e) =>
+                            setForm((prev) => ({
+                              ...prev,
+                              appendix4_rows: (Array.isArray(prev.appendix4_rows) ? prev.appendix4_rows : []).map((x) =>
+                                x.id === row.id ? { ...x, approval_no: e.target.value.toUpperCase(), quota_seq: '' } : x
+                              ),
+                            }))
+                          }
+                          className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                        >
+                          <option value="">請選擇批文編號</option>
+                          {availableApprovalNumbers.map((no) => (
+                            <option key={no} value={no}>
+                              {no}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">配額序號 *</label>
+                        <select
+                          value={row.quota_seq}
+                          onChange={(e) =>
+                            setForm((prev) => ({
+                              ...prev,
+                              appendix4_rows: (Array.isArray(prev.appendix4_rows) ? prev.appendix4_rows : []).map((x) => {
+                                if (x.id !== row.id) return x;
+                                const seqDigits = e.target.value.replace(/[^\d]/g, '').slice(-4);
+                                const normalizedSeq = seqDigits ? seqDigits.padStart(4, '0') : '';
+                                const approvalNo = String(x.approval_no || '').trim().toUpperCase();
+                                const matchedWorker = (appendix4WorkersByApprovalNo[approvalNo] || []).find((w) => w.seq === normalizedSeq);
+                                const matchedQuota = (appendix4QuotaByApprovalNo[approvalNo] || []).find((q) => q.seq === normalizedSeq);
+                                if (matchedWorker) {
+                                  return {
+                                    ...x,
+                                    quota_seq: normalizedSeq,
+                                    post_name: matchedWorker.post_name || matchedQuota?.post_name || x.post_name,
+                                    worker_name: matchedWorker.worker_name || x.worker_name,
+                                  };
+                                }
+                                if (matchedQuota) {
+                                  return {
+                                    ...x,
+                                    quota_seq: normalizedSeq,
+                                    post_name: matchedQuota.post_name || x.post_name,
+                                  };
+                                }
+                                return { ...x, quota_seq: normalizedSeq };
+                              }),
+                            }))
+                          }
+                          className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                        >
+                          <option value="">請選擇配額序號</option>
+                          {Array.from(
+                            new Set([
+                              ...(appendix4QuotaByApprovalNo[String(row.approval_no || '').trim().toUpperCase()] || []).map((item) => item.seq),
+                              ...(appendix4WorkersByApprovalNo[String(row.approval_no || '').trim().toUpperCase()] || []).map((item) => item.seq),
+                            ])
+                          ).map((seq) => (
+                            <option key={seq} value={seq}>
+                              {seq}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">職位名稱 *</label>
+                        <input
+                          type="text"
+                          value={row.post_name}
+                          onChange={(e) =>
+                            setForm((prev) => ({
+                              ...prev,
+                              appendix4_rows: (Array.isArray(prev.appendix4_rows) ? prev.appendix4_rows : []).map((x) =>
+                                x.id === row.id
+                                  ? (() => {
+                                      const nextPost = e.target.value;
+                                      const nextNormalized = String(nextPost || '').trim().toLowerCase();
+                                      const nextCanRenewal = Boolean(
+                                        nextNormalized &&
+                                          prev.common_jobs.some(
+                                            (j) => String(j.post_name || '').trim().toLowerCase() === nextNormalized
+                                          )
+                                      );
+                                      return {
+                                        ...x,
+                                        post_name: nextPost,
+                                        renewal_quota: nextCanRenewal ? x.renewal_quota : false,
+                                      };
+                                    })()
+                                  : x
+                              ),
+                            }))
+                          }
+                          className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                        />
+                        {((appendix4QuotaByApprovalNo[String(row.approval_no || '').trim().toUpperCase()] || []).length > 0 ||
+                          (appendix4WorkersByApprovalNo[String(row.approval_no || '').trim().toUpperCase()] || []).length > 0) && (
+                          <p className="text-xs text-gray-500 mt-1 ml-1">選擇配額序號後會自動帶入資料（有勞工時帶入姓名+職位，否則至少帶入職位）。</p>
+                        )}
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">輸入勞工姓名 *</label>
+                        <input
+                          type="text"
+                          value={row.worker_name}
+                          onChange={(e) =>
+                            setForm((prev) => ({
+                              ...prev,
+                              appendix4_rows: (Array.isArray(prev.appendix4_rows) ? prev.appendix4_rows : []).map((x) =>
+                                x.id === row.id ? { ...x, worker_name: e.target.value } : x
+                              ),
+                            }))
+                          }
+                          className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">是否續約</label>
+                        <label className={clsx('inline-flex items-center gap-2 h-10 px-2 text-sm', canSelectRenewal ? 'text-gray-700' : 'text-gray-400')}>
+                          <input
+                            type="checkbox"
+                            checked={Boolean(row.renewal_quota) && canSelectRenewal}
+                            onChange={(e) =>
+                              canSelectRenewal
+                                ? setForm((prev) => ({
+                                    ...prev,
+                                    appendix4_rows: (Array.isArray(prev.appendix4_rows) ? prev.appendix4_rows : []).map((x) =>
+                                      x.id === row.id ? { ...x, renewal_quota: e.target.checked } : x
+                                    ),
+                                  }))
+                                : undefined
+                            }
+                            disabled={!canSelectRenewal}
+                            className="h-4 w-4 rounded border-gray-300 text-apple-blue focus:ring-apple-blue disabled:opacity-50"
+                          />
+                          是
+                        </label>
+                        {!canSelectRenewal && (
+                          <p className="text-xs text-gray-400 mt-1 ml-1">需與「申請常見職位」存在相同職位名稱才可勾選。</p>
+                        )}
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">合約開始日期（YYYY/MM/DD）*</label>
+                        <input
+                          type="text"
+                          value={row.contract_start}
+                          onChange={(e) => {
+                            const nextStart = formatDateInputYYYYMMDD(e.target.value);
+                            setForm((prev) => ({
+                              ...prev,
+                              appendix4_rows: (Array.isArray(prev.appendix4_rows) ? prev.appendix4_rows : []).map((x) => {
+                                if (x.id !== row.id) return x;
+                                const autoEnd = x.contract_end_manual ? x.contract_end : addMonthsToYmdSlash(nextStart, 24);
+                                return { ...x, contract_start: nextStart, contract_end: autoEnd };
+                              }),
+                            }));
+                          }}
+                          inputMode="numeric"
+                          placeholder="例如：2026/03/14"
+                          className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">合約完結日期（YYYY/MM/DD）*</label>
+                        <input
+                          type="text"
+                          value={row.contract_end}
+                          onChange={(e) =>
+                              setForm((prev) => ({
+                                ...prev,
+                                appendix4_rows: (Array.isArray(prev.appendix4_rows) ? prev.appendix4_rows : []).map((x) =>
+                                x.id === row.id
+                                  ? { ...x, contract_end: formatDateInputYYYYMMDD(e.target.value), contract_end_manual: true }
+                                  : x
+                              ),
+                            }))
+                          }
+                          inputMode="numeric"
+                          placeholder="自動=開始日期+24個月，可手動改"
+                          className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm"
+                        />
+                      </div>
+                          </>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           ) : (

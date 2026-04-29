@@ -21,6 +21,7 @@ import { useWorkersPageData } from '../features/workers/hooks/useWorkersPageData
 import { buildWorkerSubmitPayload, validateWorkerSubmitInput } from '../features/workers/form/workerSubmitService';
 import { submitEntityDeleteRequest } from '../utils/entityDeleteRequests';
 import { resolveApprovalEmployerId } from '../utils/approvalEmployer';
+import { toWorkerNamePinyin } from '../utils/namePinyin';
 
 const MAX_FILES_PER_CATEGORY = 10;
 const MAX_FILE_SIZE = MAX_UPLOAD_SIZE;
@@ -80,6 +81,7 @@ const Workers: React.FC = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [formData, setFormData] = useState<WorkerCreate>(initialForm);
+  const [pinyinTouched, setPinyinTouched] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const [profile, setProfile] = useState<WorkerProfile>({
@@ -521,6 +523,7 @@ const Workers: React.FC = () => {
     });
     setIsEditing(false);
     setSelectedId(null);
+    setPinyinTouched(false);
     setIsModalOpen(true);
   };
 
@@ -634,6 +637,7 @@ const Workers: React.FC = () => {
 
     setIsEditing(true);
     setSelectedId(worker.id);
+    setPinyinTouched(false);
     setIsModalOpen(true);
   };
 
@@ -954,7 +958,13 @@ const Workers: React.FC = () => {
               <input
                 type="text"
                 value={formData.labour_name}
-                onChange={(e) => setFormData({ ...formData, labour_name: e.target.value })}
+                onChange={(e) => {
+                  const labourName = e.target.value;
+                  setFormData({ ...formData, labour_name: labourName });
+                  if (pinyinTouched) return;
+                  const generated = toWorkerNamePinyin(labourName);
+                  setProfile((prev) => ({ ...prev, pinyin_name: generated }));
+                }}
                 className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
                 required
               />
@@ -978,7 +988,10 @@ const Workers: React.FC = () => {
               <input
                 type="text"
                 value={profile.pinyin_name || ''}
-                onChange={(e) => setProfile(prev => ({ ...prev, pinyin_name: e.target.value }))}
+                onChange={(e) => {
+                  setPinyinTouched(true);
+                  setProfile(prev => ({ ...prev, pinyin_name: e.target.value }));
+                }}
                 className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
                 placeholder="例如：ZHANG SAN"
               />

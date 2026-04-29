@@ -6,11 +6,20 @@ import Modal from '../components/Modal';
 import { 
   Partner, PartnerCreate, getPartners, createPartner, updatePartner
 } from '../api/settings';
+import {
+  AuthorizedParty,
+  AuthorizedPartyInput,
+  createAuthorizedParty,
+  deleteAuthorizedParty,
+  filterAuthorizedParties,
+  readAuthorizedParties,
+  updateAuthorizedParty,
+} from '../utils/authorizedParties';
 import Users, { UsersHandle } from './Users';
 import { getAuthIdentity } from '../utils/authRole';
 import { GlobalAuditLog, readGlobalAuditLogs } from '../utils/auditLog';
 
-type Tab = 'partners' | 'users' | 'api_keys' | 'audit_logs';
+type Tab = 'partners' | 'authorized_parties' | 'users' | 'api_keys' | 'audit_logs';
 
 type HttpErrorLike = {
   response?: {
@@ -33,15 +42,26 @@ const Settings: React.FC = () => {
   const usersRef = useRef<UsersHandle>(null);
 
   const [partners, setPartners] = useState<Partner[]>([]);
+  const [authorizedParties, setAuthorizedParties] = useState<AuthorizedParty[]>([]);
 
   // Modal states
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedAuthorizedPartyId, setSelectedAuthorizedPartyId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   // Form states
   const [partnerForm, setPartnerForm] = useState<PartnerCreate>({ name: '' });
+  const [authorizedPartyForm, setAuthorizedPartyForm] = useState<AuthorizedPartyInput>({
+    company_name: '',
+    business_registration_number: '',
+    representative_name: '',
+    gender: 'male',
+    email: '',
+    id_type: 'HKID',
+    id_number: '',
+  });
 
   const [apiKeys, setApiKeys] = useState({
     tencentSecretId: '',
@@ -87,6 +107,21 @@ const Settings: React.FC = () => {
       return;
     }
 
+    if (activeTab === 'authorized_parties') {
+      setLoading(true);
+      setError('');
+      try {
+        const list = readAuthorizedParties();
+        setAuthorizedParties(filterAuthorizedParties(list, search));
+      } catch {
+        setAuthorizedParties([]);
+        setError('讀取授權方資料失敗');
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
     if (activeTab === 'users') return;
 
     try {
@@ -117,13 +152,26 @@ const Settings: React.FC = () => {
   const handleOpenCreate = () => {
     setIsEditing(false);
     setSelectedId(null);
+    setSelectedAuthorizedPartyId(null);
     if (activeTab === 'partners') setPartnerForm({ name: '' });
+    if (activeTab === 'authorized_parties') {
+      setAuthorizedPartyForm({
+        company_name: '',
+        business_registration_number: '',
+        representative_name: '',
+        gender: 'male',
+        email: '',
+        id_type: 'HKID',
+        id_number: '',
+      });
+    }
     setIsModalOpen(true);
   };
 
   const handleOpenEdit = (item: Partner) => {
     setIsEditing(true);
     setSelectedId(item.id);
+    setSelectedAuthorizedPartyId(null);
     setPartnerForm({
       name: item.name,
       phone: item.phone || '',
@@ -133,10 +181,33 @@ const Settings: React.FC = () => {
     setIsModalOpen(true);
   };
 
+  const handleOpenEditAuthorizedParty = (item: AuthorizedParty) => {
+    setIsEditing(true);
+    setSelectedId(null);
+    setSelectedAuthorizedPartyId(item.id);
+    setAuthorizedPartyForm({
+      company_name: item.company_name || '',
+      business_registration_number: item.business_registration_number || '',
+      representative_name: item.representative_name || '',
+      gender: item.gender || 'male',
+      email: item.email || '',
+      id_type: item.id_type || 'HKID',
+      id_number: item.id_number || '',
+    });
+    setIsModalOpen(true);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
     try {
+      if (activeTab === 'authorized_parties') {
+        if (isEditing && selectedAuthorizedPartyId) updateAuthorizedParty(selectedAuthorizedPartyId, authorizedPartyForm);
+        else createAuthorizedParty(authorizedPartyForm);
+        setIsModalOpen(false);
+        fetchData();
+        return;
+      }
       if (isEditing && selectedId) await updatePartner(selectedId, partnerForm);
       else await createPartner(partnerForm);
       setIsModalOpen(false);
@@ -148,6 +219,13 @@ const Settings: React.FC = () => {
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleDeleteAuthorizedParty = (id: string) => {
+    const ok = window.confirm('確定要刪除此授權方資料嗎？');
+    if (!ok) return;
+    deleteAuthorizedParty(id);
+    fetchData();
   };
 
   const handleSaveApiKeys = (e: React.FormEvent) => {
@@ -475,7 +553,55 @@ const Settings: React.FC = () => {
       );
     }
 
-    if (loading && !partners.length) {
+    if (activeTab === 'authorized_parties') {
+      return (
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50/50">
+            <tr>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">第三方公司名稱</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">商業登記號碼</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">姓名/性別</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">電郵</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">身份證明文件</th>
+              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
+            </tr>
+          </thead>
+          <tbody className="bg-white/30 divide-y divide-gray-200">
+            {authorizedParties.length === 0 ? (
+              <tr><td colSpan={6} className="px-6 py-8 text-center text-gray-500">找不到資料</td></tr>
+            ) : (
+              authorizedParties.map((item) => (
+                <tr key={item.id} className="hover:bg-gray-50/50">
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{item.company_name || '-'}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.business_registration_number || '-'}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    {item.representative_name || '-'} / {item.gender === 'female' ? '女' : '男'}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.email || '-'}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    {item.id_type === 'HKID' ? '香港身份證' : '其他證據'}：{item.id_number || '-'}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                    <button onClick={() => handleOpenEditAuthorizedParty(item)} className="text-apple-blue hover:text-blue-900 bg-blue-50 hover:bg-blue-100 p-2 rounded-full transition-colors">
+                      <Edit2 className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteAuthorizedParty(item.id)}
+                      className="text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 p-2 rounded-full transition-colors ml-2"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      );
+    }
+
+    if (loading && activeTab === 'partners' && !partners.length) {
       return (
         <div className="py-12 text-center">
           <Loader2 className="w-8 h-8 animate-spin text-apple-blue mx-auto" />
@@ -520,6 +646,7 @@ const Settings: React.FC = () => {
   const getTabLabel = (tab: Tab) => {
     switch(tab) {
       case 'partners': return '合作方';
+      case 'authorized_parties': return '授權方管理';
       case 'users': return '用戶管理';
       case 'api_keys': return 'API 金鑰管理';
       case 'audit_logs': return '查看日誌';
@@ -531,9 +658,9 @@ const Settings: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold text-apple-dark">系統設定</h1>
-          <p className="text-gray-500 mt-1">管理合作方、用戶與系統 API</p>
+          <p className="text-gray-500 mt-1">管理合作方、授權方、用戶與系統 API</p>
         </div>
-        {(activeTab === 'partners' || activeTab === 'users') && (
+        {(activeTab === 'partners' || activeTab === 'authorized_parties' || activeTab === 'users') && (
           <button 
             onClick={() => {
               if (activeTab === 'users') {
@@ -554,8 +681,8 @@ const Settings: React.FC = () => {
         <div className="border-b border-gray-200/50 bg-white/60 px-4 py-3">
           <div className="flex flex-wrap gap-2">
             {((getAuthIdentity().roleKey === 'super_admin'
-              ? ['partners', 'users', 'api_keys', 'audit_logs']
-              : ['partners', 'users', 'api_keys']) as Tab[]).map((tab) => (
+              ? ['partners', 'authorized_parties', 'users', 'api_keys', 'audit_logs']
+              : ['partners', 'authorized_parties', 'users', 'api_keys']) as Tab[]).map((tab) => (
               <button
                 key={tab}
                 onClick={() => { setActiveTab(tab); setSearch(''); }}
@@ -567,6 +694,7 @@ const Settings: React.FC = () => {
                 )}
               >
                 {tab === 'partners' && <Handshake className="w-4 h-4" />}
+                {tab === 'authorized_parties' && <Handshake className="w-4 h-4" />}
                 {tab === 'users' && <Users2 className="w-4 h-4" />}
                 {tab === 'api_keys' && <Key className="w-4 h-4" />}
                 {tab === 'audit_logs' && <ScrollText className="w-4 h-4" />}
@@ -576,7 +704,7 @@ const Settings: React.FC = () => {
           </div>
         </div>
 
-        {(activeTab === 'partners' || activeTab === 'audit_logs') && (
+        {(activeTab === 'partners' || activeTab === 'authorized_parties' || activeTab === 'audit_logs') && (
           <div className="p-4 border-b border-gray-200/50 bg-white/30 flex items-center justify-between">
             <div className="flex items-center gap-2 w-full">
               <div className="relative w-full max-w-sm">
@@ -632,48 +760,125 @@ const Settings: React.FC = () => {
         isOpen={isModalOpen} 
         onClose={() => setIsModalOpen(false)}
         title={isEditing ? `編輯${getTabLabel(activeTab)}` : `新增${getTabLabel(activeTab)}`}
-        className="max-w-md"
+        className={activeTab === 'authorized_parties' ? 'max-w-2xl' : 'max-w-md'}
       >
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">名稱 *</label>
-              <input
-                type="text"
-                value={partnerForm.name}
-                onChange={(e) => setPartnerForm({ ...partnerForm, name: e.target.value })}
-                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
-                required
-              />
+          {activeTab === 'authorized_parties' ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">第三方公司名稱 *</label>
+                <input
+                  type="text"
+                  value={authorizedPartyForm.company_name}
+                  onChange={(e) => setAuthorizedPartyForm((prev) => ({ ...prev, company_name: e.target.value }))}
+                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">第三方公司商業登記號碼（8位）*</label>
+                <input
+                  type="text"
+                  value={authorizedPartyForm.business_registration_number}
+                  onChange={(e) => setAuthorizedPartyForm((prev) => ({ ...prev, business_registration_number: e.target.value.replace(/[^\d]/g, '').slice(0, 8) }))}
+                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">姓名 *</label>
+                <input
+                  type="text"
+                  value={authorizedPartyForm.representative_name}
+                  onChange={(e) => setAuthorizedPartyForm((prev) => ({ ...prev, representative_name: e.target.value }))}
+                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">性別 *</label>
+                <select
+                  value={authorizedPartyForm.gender}
+                  onChange={(e) => setAuthorizedPartyForm((prev) => ({ ...prev, gender: e.target.value as 'male' | 'female' }))}
+                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                >
+                  <option value="male">男</option>
+                  <option value="female">女</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">電郵 *</label>
+                <input
+                  type="email"
+                  value={authorizedPartyForm.email}
+                  onChange={(e) => setAuthorizedPartyForm((prev) => ({ ...prev, email: e.target.value }))}
+                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">身份證明文件類別 *</label>
+                <select
+                  value={authorizedPartyForm.id_type}
+                  onChange={(e) => setAuthorizedPartyForm((prev) => ({ ...prev, id_type: e.target.value as 'HKID' | 'OTHER' }))}
+                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                >
+                  <option value="HKID">香港身份證</option>
+                  <option value="OTHER">其他證據</option>
+                </select>
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">證件號 *</label>
+                <input
+                  type="text"
+                  value={authorizedPartyForm.id_number}
+                  onChange={(e) => setAuthorizedPartyForm((prev) => ({ ...prev, id_number: e.target.value }))}
+                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                  required
+                />
+              </div>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">聯絡電話</label>
-              <input
-                type="text"
-                value={partnerForm.phone || ''}
-                onChange={(e) => setPartnerForm({ ...partnerForm, phone: e.target.value })}
-                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
-              />
+          ) : (
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">名稱 *</label>
+                <input
+                  type="text"
+                  value={partnerForm.name}
+                  onChange={(e) => setPartnerForm({ ...partnerForm, name: e.target.value })}
+                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">聯絡電話</label>
+                <input
+                  type="text"
+                  value={partnerForm.phone || ''}
+                  onChange={(e) => setPartnerForm({ ...partnerForm, phone: e.target.value })}
+                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">Email</label>
+                <input
+                  type="email"
+                  value={partnerForm.email || ''}
+                  onChange={(e) => setPartnerForm({ ...partnerForm, email: e.target.value })}
+                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">備註</label>
+                <textarea
+                  value={partnerForm.remarks || ''}
+                  onChange={(e) => setPartnerForm({ ...partnerForm, remarks: e.target.value })}
+                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                  rows={3}
+                />
+              </div>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">Email</label>
-              <input
-                type="email"
-                value={partnerForm.email || ''}
-                onChange={(e) => setPartnerForm({ ...partnerForm, email: e.target.value })}
-                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">備註</label>
-              <textarea
-                value={partnerForm.remarks || ''}
-                onChange={(e) => setPartnerForm({ ...partnerForm, remarks: e.target.value })}
-                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
-                rows={3}
-              />
-            </div>
-          </div>
+          )}
 
           <div className="pt-4 flex justify-end space-x-3 border-t border-gray-100 mt-6">
             <button
