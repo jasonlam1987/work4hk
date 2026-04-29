@@ -211,13 +211,29 @@ export default async function handler(req: any, res: any) {
     const bytes = Buffer.from(base64, 'base64');
     if (bytes.length > MAX_SIZE) throw new Error('file too large');
 
-    const uid = randomUUID();
     const sha256 = createHash('sha256').update(bytes).digest('hex');
     const requesterId = parseUserId(req);
     const requesterName = parseUserName(req);
-    const baseObjectPath = getSupabaseObjectPath(moduleName, ownerId, folder, uid, fileName);
-    const objectPath = injectUploaderIntoObjectPath(baseObjectPath, uid, requesterId, requesterName);
-    await uploadToSupabaseStorage(objectPath, bytes, mimeType);
+    let uid = '';
+    let objectPath = '';
+    let uploaded = false;
+    let lastUploadError: any = null;
+    for (let i = 0; i < 3; i += 1) {
+      uid = randomUUID();
+      const baseObjectPath = getSupabaseObjectPath(moduleName, ownerId, folder, uid, fileName);
+      objectPath = injectUploaderIntoObjectPath(baseObjectPath, uid, requesterId, requesterName);
+      try {
+        await uploadToSupabaseStorage(objectPath, bytes, mimeType);
+        uploaded = true;
+        break;
+      } catch (uploadErr: any) {
+        lastUploadError = uploadErr;
+        const msg = String(uploadErr?.message || uploadErr);
+        const isConflict = msg.includes('statusCode":"409"') || msg.toLowerCase().includes('resource already exists');
+        if (!isConflict) break;
+      }
+    }
+    if (!uploaded) throw lastUploadError || new Error('supabase upload failed');
     const token = createDownloadToken({
       uid,
       object_path: objectPath,
