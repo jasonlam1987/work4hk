@@ -12,6 +12,7 @@ import filesDeleteRequestHandler from './api/ai/files-delete-request'
 import filesDeleteReviewHandler from './api/ai/files-delete-review'
 import filesDeleteRequestsHandler from './api/ai/files-delete-requests'
 import filesDeleteRequestsPruneHandler from './api/ai/files-delete-requests-prune'
+import globalAuditLogsHandler from './api/ai/global-audit-logs'
 import checkUsernameHandler from './api/auth/check-username'
 import authLoginHandler from './api/auth/login'
 import checkUserUniqueHandler from './api/auth/check-user-unique'
@@ -71,6 +72,11 @@ const brOcrDevPlugin = () => {
       server.middlewares.use('/api/ai/files-delete-requests-prune', async (req: any, res: any) => {
         attachQuery(req);
         return filesDeleteRequestsPruneHandler(req, res);
+      });
+
+      server.middlewares.use('/api/ai/global-audit-logs', async (req: any, res: any) => {
+        attachQuery(req);
+        return globalAuditLogsHandler(req, res);
       });
 
       server.middlewares.use('/api/auth/check-username', async (req: any, res: any) => {

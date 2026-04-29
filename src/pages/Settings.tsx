@@ -59,7 +59,17 @@ const Settings: React.FC = () => {
 
   const fetchData = useCallback(async () => {
     if (activeTab === 'audit_logs') {
-      setAuditLogs(readGlobalAuditLogs());
+      setLoading(true);
+      setError('');
+      try {
+        const logs = await readGlobalAuditLogs();
+        setAuditLogs(logs);
+      } catch {
+        setAuditLogs([]);
+        setError('讀取日誌失敗');
+      } finally {
+        setLoading(false);
+      }
       return;
     }
     if (activeTab === 'api_keys') {

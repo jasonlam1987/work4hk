@@ -1,6 +1,9 @@
 import { getAuthIdentity } from './authRole';
+import apiClient from '../api/client';
 
 export const GLOBAL_AUDIT_LOG_KEY = 'global_audit_logs_v1';
+const GLOBAL_AUDIT_PENDING_KEY = 'global_audit_logs_pending_v1';
+let flushInFlight = false;
 
 export type GlobalAuditAction =
   | 'login'
@@ -29,11 +32,76 @@ export type GlobalAuditLog = {
   details?: string;
 };
 
-export const readGlobalAuditLogs = (): GlobalAuditLog[] => {
+type AuditLogsGetResponse = {
+  items?: GlobalAuditLog[];
+};
+
+type AuditLogsPostResponse = {
+  ok?: boolean;
+  appended?: number;
+};
+
+const readPendingLogs = (): GlobalAuditLog[] => {
   try {
-    const raw = localStorage.getItem(GLOBAL_AUDIT_LOG_KEY);
+    const raw = localStorage.getItem(GLOBAL_AUDIT_PENDING_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
     return Array.isArray(parsed) ? (parsed as GlobalAuditLog[]) : [];
+  } catch {
+    return [];
+  }
+};
+
+const writePendingLogs = (items: GlobalAuditLog[]) => {
+  try {
+    if (!items.length) {
+      localStorage.removeItem(GLOBAL_AUDIT_PENDING_KEY);
+      return;
+    }
+    localStorage.setItem(GLOBAL_AUDIT_PENDING_KEY, JSON.stringify(items));
+  } catch {
+    // keep silent to avoid blocking user actions
+  }
+};
+
+const flushPendingLogs = async () => {
+  if (flushInFlight) return;
+  const pending = readPendingLogs();
+  if (!pending.length) return;
+
+  const identity = getAuthIdentity();
+  flushInFlight = true;
+  try {
+    await apiClient.post<AuditLogsPostResponse>(
+      '/ai/global-audit-logs',
+      { items: pending },
+      {
+        headers: {
+          'x-user-role': identity.roleKey || '',
+          'x-user-id': identity.userId || '',
+          'x-user-name': encodeURIComponent(identity.userName || ''),
+        },
+      }
+    );
+    writePendingLogs([]);
+  } catch {
+    // keep queue for next retry
+  } finally {
+    flushInFlight = false;
+  }
+};
+
+export const readGlobalAuditLogs = async (): Promise<GlobalAuditLog[]> => {
+  const identity = getAuthIdentity();
+  try {
+    const { data } = await apiClient.get<AuditLogsGetResponse>('/ai/global-audit-logs', {
+      headers: {
+        'x-user-role': identity.roleKey || '',
+        'x-user-id': identity.userId || '',
+        'x-user-name': encodeURIComponent(identity.userName || ''),
+      },
+    });
+    const items = Array.isArray(data?.items) ? data.items : [];
+    return items.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   } catch {
     return [];
   }
@@ -51,7 +119,8 @@ export const appendGlobalAuditLog = (
     actor_role: identity.roleKey || 'unknown',
     ...payload,
   };
-  const all = [nextLog, ...readGlobalAuditLogs()];
-  localStorage.setItem(GLOBAL_AUDIT_LOG_KEY, JSON.stringify(all));
+  const pending = readPendingLogs();
+  writePendingLogs([nextLog, ...pending].slice(0, 500));
+  void flushPendingLogs();
   return nextLog;
 };
