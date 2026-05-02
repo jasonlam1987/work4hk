@@ -7,11 +7,24 @@ const enabled = Boolean(supabaseUrl && supabaseServiceRoleKey);
 export const isSupabaseStorageEnabled = () => enabled;
 
 const encodePath = (p: string) => String(p || '').split('/').map(encodeURIComponent).join('/');
-const safeFileName = (v: string) =>
-  String(v || 'file')
-    .replace(/[\/\\]/g, '_')
-    .replace(/[\u0000-\u001F\u007F]/g, '_')
-    .trim() || 'file';
+const safeFileName = (v: string) => {
+  const raw = String(v || 'file').trim() || 'file';
+  const dot = raw.lastIndexOf('.');
+  const hasExt = dot > 0 && dot < raw.length - 1;
+  const base = hasExt ? raw.slice(0, dot) : raw;
+  const ext = hasExt ? raw.slice(dot + 1) : '';
+  const cleanPart = (s: string) =>
+    String(s || '')
+      .normalize('NFKD')
+      .replace(/[\/\\]/g, '_')
+      .replace(/[\u0000-\u001F\u007F]/g, '_')
+      .replace(/[^A-Za-z0-9._-]+/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^[_\.-]+|[_\.-]+$/g, '');
+  const safeBase = cleanPart(base) || 'file';
+  const safeExt = cleanPart(ext);
+  return safeExt ? `${safeBase}.${safeExt}` : safeBase;
+};
 const folderSegment = (folder: string) => `f_${Buffer.from(String(folder || ''), 'utf8').toString('base64url')}`;
 
 const baseHeaders = () => ({
