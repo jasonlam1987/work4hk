@@ -1,4 +1,9 @@
-import { getSupabaseObjectSize, isSupabaseStorageEnabled, listSupabaseStorageRecursive } from './_supabase_storage.js';
+import {
+  getSupabaseObjectInfoSize,
+  getSupabaseObjectSize,
+  isSupabaseStorageEnabled,
+  listSupabaseStorageRecursive,
+} from './_supabase_storage.js';
 
 export const config = {
   runtime: 'nodejs',
@@ -63,6 +68,47 @@ const readSupabaseMetrics = async () => {
   return { usedBytes, capacityBytes, fileCount };
 };
 
+const pickNumericByKeys = (input: any, keyHints: string[]) => {
+  const hints = keyHints.map((k) => String(k).toLowerCase());
+  const queue = [input];
+  while (queue.length) {
+    const cur = queue.shift();
+    if (!cur || typeof cur !== 'object') continue;
+    for (const [k, v] of Object.entries(cur)) {
+      const lk = String(k).toLowerCase();
+      if (hints.some((h) => lk.includes(h))) {
+        const n = Number(v);
+        if (Number.isFinite(n) && n >= 0) return n;
+      }
+      if (v && typeof v === 'object') queue.push(v);
+    }
+  }
+  return null;
+};
+
+const readSupabaseManagementUsage = async () => {
+  const token = String(process.env.SUPABASE_MANAGEMENT_ACCESS_TOKEN || process.env.SUPABASE_ACCESS_TOKEN || '').trim();
+  const projectRef = String(process.env.SUPABASE_PROJECT_REF || '').trim();
+  if (!token || !projectRef) return { usedBytes: null as number | null, capacityBytes: null as number | null };
+  const endpoints = [
+    `https://api.supabase.com/v1/projects/${encodeURIComponent(projectRef)}/usage`,
+    `https://api.supabase.com/v1/projects/${encodeURIComponent(projectRef)}/billing/usage`,
+  ];
+  for (const url of endpoints) {
+    try {
+      const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (!resp.ok) continue;
+      const json = await resp.json().catch(() => ({}));
+      const usedBytes = pickNumericByKeys(json, ['storage_size', 'storage_used', 'storage_usage', 'storage_bytes']);
+      const capacityBytes = pickNumericByKeys(json, ['storage_quota', 'storage_limit', 'storage_capacity']);
+      if (usedBytes != null || capacityBytes != null) return { usedBytes, capacityBytes };
+    } catch {
+      // continue trying next endpoint
+    }
+  }
+  return { usedBytes: null as number | null, capacityBytes: null as number | null };
+};
+
 const readSupabaseUsage = async () => {
   let usedBytes = 0;
   let fileCount = 0;
@@ -75,6 +121,13 @@ const readSupabaseUsage = async () => {
         const objectPath = String(item?.objectPath || '');
         if (!objectPath) continue;
         let size = Number((item as any)?.row?.metadata?.size || 0);
+        if (!Number.isFinite(size) || size <= 0) {
+          try {
+            size = await getSupabaseObjectInfoSize(objectPath);
+          } catch {
+            size = 0;
+          }
+        }
         if (!Number.isFinite(size) || size <= 0) {
           try {
             size = await getSupabaseObjectSize(objectPath);
@@ -112,6 +165,7 @@ const readLocalUsage = async () => {
 
 const readSupabaseUsageWithMetrics = async () => {
   const usage = await readSupabaseUsage();
+  const mgmt = await readSupabaseManagementUsage();
   let metrics: { usedBytes: number | null; capacityBytes: number | null; fileCount: number | null } = {
     usedBytes: null,
     capacityBytes: null,
@@ -123,10 +177,11 @@ const readSupabaseUsageWithMetrics = async () => {
     // metrics endpoint may be unavailable in some regions/plans
   }
   return {
-    usedBytes: metrics.usedBytes ?? usage.usedBytes,
+    usedBytes: mgmt.usedBytes ?? metrics.usedBytes ?? usage.usedBytes,
     fileCount: metrics.fileCount != null ? Number(metrics.fileCount) : usage.fileCount,
     byModule: usage.byModule,
-    capacityBytes: metrics.capacityBytes,
+    capacityBytes: mgmt.capacityBytes ?? metrics.capacityBytes,
+    capacitySource: mgmt.capacityBytes != null ? 'SUPABASE_MANAGEMENT_API' : metrics.capacityBytes != null ? 'SUPABASE_METRICS_API' : '',
     warnings: usage.warnings,
   };
 };
@@ -148,14 +203,14 @@ export default async function handler(req: any, res: any) {
       by_module: usage.byModule,
       used_bytes: usage.usedBytes,
       capacity_bytes: capacityBytes,
-      capacity_source: cap?.source || (backend === 'supabase' && capacityBytes ? 'SUPABASE_METRICS_API' : ''),
+      capacity_source: cap?.source || (backend === 'supabase' && capacityBytes ? (usage as any).capacitySource || 'SUPABASE_METRICS_API' : ''),
       remaining_bytes: remainingBytes,
       usage_ratio: usageRatio,
       max_upload_size_bytes: MAX_UPLOAD_SIZE_BYTES,
       note: capacityBytes
         ? ''
         : backend === 'supabase'
-          ? '未從 Supabase 指標 API 取得總容量上限，僅顯示已使用容量。'
+          ? '未從 Supabase API 取得總容量上限；可配置 SUPABASE_MANAGEMENT_ACCESS_TOKEN + SUPABASE_PROJECT_REF 以顯示即時總容量。'
           : '未設定容量上限環境變量（FILE_STORAGE_CAPACITY_BYTES / SUPABASE_STORAGE_CAPACITY_BYTES），僅顯示已使用容量。',
       warnings: Array.isArray((usage as any).warnings) ? (usage as any).warnings : [],
     });

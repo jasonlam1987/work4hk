@@ -202,3 +202,16 @@ export const getSupabaseObjectSize = async (objectPath: string) => {
   const len = Number(resp.headers.get('content-length') || 0);
   return Number.isFinite(len) && len > 0 ? len : 0;
 };
+
+export const getSupabaseObjectInfoSize = async (objectPath: string) => {
+  if (!enabled) throw new Error('supabase storage not configured');
+  const url = `${supabaseUrl}/storage/v1/object/info/${encodePath(bucket)}/${encodePath(objectPath)}`;
+  const resp = await fetch(url, { headers: baseHeaders() });
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => '');
+    throw new Error(`supabase info failed: ${resp.status} ${detail}`);
+  }
+  const json = await resp.json().catch(() => ({}));
+  const size = Number((json as any)?.size || (json as any)?.metadata?.size || 0);
+  return Number.isFinite(size) && size > 0 ? size : 0;
+};
