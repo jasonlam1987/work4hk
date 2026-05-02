@@ -107,7 +107,12 @@ export const listSupabaseStorageRecursive = async (rootPrefix: string) => {
         const name = String(row?.name || '');
         if (!name) continue;
         const nextPath = name.startsWith(prefix) ? name : `${prefix}${name}`;
-        const isFolder = String(row?.id || '').endsWith('/') || name.endsWith('/');
+        const segCount = nextPath.split('/').filter(Boolean).length;
+        const isFolder =
+          String(row?.id || '').endsWith('/') ||
+          name.endsWith('/') ||
+          segCount < 4 ||
+          !name.includes('__');
         if (isFolder) {
           queue.push(nextPath.endsWith('/') ? nextPath : `${nextPath}/`);
         } else {
