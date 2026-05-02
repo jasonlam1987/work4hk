@@ -1,4 +1,9 @@
-import { getSupabaseObjectSize, isSupabaseStorageEnabled, listSupabaseStorageRecursive } from './_supabase_storage.js';
+import {
+  downloadFromSupabaseStorage,
+  getSupabaseObjectSize,
+  isSupabaseStorageEnabled,
+  listSupabaseStorageRecursive,
+} from './_supabase_storage.js';
 
 export const config = {
   runtime: 'nodejs',
@@ -76,6 +81,15 @@ const readSupabaseUsage = async () => {
       if (!Number.isFinite(size) || size <= 0) {
         try {
           size = await getSupabaseObjectSize(objectPath);
+        } catch {
+          size = 0;
+        }
+      }
+      // Final fallback: fetch object bytes to get exact size when metadata/HEAD are unavailable.
+      if (!Number.isFinite(size) || size <= 0) {
+        try {
+          const bytes = await downloadFromSupabaseStorage(objectPath);
+          size = Number(bytes?.length || 0);
         } catch {
           size = 0;
         }
