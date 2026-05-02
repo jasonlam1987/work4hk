@@ -1,9 +1,4 @@
-import {
-  downloadFromSupabaseStorage,
-  getSupabaseObjectSize,
-  isSupabaseStorageEnabled,
-  listSupabaseStorageRecursive,
-} from './_supabase_storage.js';
+import { getSupabaseObjectSize, isSupabaseStorageEnabled, listSupabaseStorageRecursive } from './_supabase_storage.js';
 
 export const config = {
   runtime: 'nodejs',
@@ -72,36 +67,32 @@ const readSupabaseUsage = async () => {
   let usedBytes = 0;
   let fileCount = 0;
   const byModule: Record<string, number> = { employers: 0, approvals: 0, workers: 0, other: 0 };
+  const warnings: string[] = [];
   for (const moduleName of MODULES) {
-    const rows = await listSupabaseStorageRecursive(`${moduleName}/`);
-    for (const item of rows) {
-      const objectPath = String(item?.objectPath || '');
-      if (!objectPath) continue;
-      let size = Number((item as any)?.row?.metadata?.size || 0);
-      if (!Number.isFinite(size) || size <= 0) {
-        try {
-          size = await getSupabaseObjectSize(objectPath);
-        } catch {
-          size = 0;
+    try {
+      const rows = await listSupabaseStorageRecursive(`${moduleName}/`);
+      for (const item of rows) {
+        const objectPath = String(item?.objectPath || '');
+        if (!objectPath) continue;
+        let size = Number((item as any)?.row?.metadata?.size || 0);
+        if (!Number.isFinite(size) || size <= 0) {
+          try {
+            size = await getSupabaseObjectSize(objectPath);
+          } catch {
+            size = 0;
+          }
         }
+        usedBytes += Number.isFinite(size) && size > 0 ? size : 0;
+        fileCount += 1;
+        const top = objectPath.split('/')[0];
+        if (top === 'employers' || top === 'approvals' || top === 'workers') byModule[top] += 1;
+        else byModule.other += 1;
       }
-      // Final fallback: fetch object bytes to get exact size when metadata/HEAD are unavailable.
-      if (!Number.isFinite(size) || size <= 0) {
-        try {
-          const bytes = await downloadFromSupabaseStorage(objectPath);
-          size = Number(bytes?.length || 0);
-        } catch {
-          size = 0;
-        }
-      }
-      usedBytes += Number.isFinite(size) && size > 0 ? size : 0;
-      fileCount += 1;
-      const top = objectPath.split('/')[0];
-      if (top === 'employers' || top === 'approvals' || top === 'workers') byModule[top] += 1;
-      else byModule.other += 1;
+    } catch (e: any) {
+      warnings.push(`${moduleName}: ${String(e?.message || e || 'list_failed')}`);
     }
   }
-  return { usedBytes, fileCount, byModule };
+  return { usedBytes, fileCount, byModule, warnings };
 };
 
 const readLocalUsage = async () => {
@@ -136,6 +127,7 @@ const readSupabaseUsageWithMetrics = async () => {
     fileCount: metrics.fileCount != null ? Number(metrics.fileCount) : usage.fileCount,
     byModule: usage.byModule,
     capacityBytes: metrics.capacityBytes,
+    warnings: usage.warnings,
   };
 };
 
@@ -165,6 +157,7 @@ export default async function handler(req: any, res: any) {
         : backend === 'supabase'
           ? '未從 Supabase 指標 API 取得總容量上限，僅顯示已使用容量。'
           : '未設定容量上限環境變量（FILE_STORAGE_CAPACITY_BYTES / SUPABASE_STORAGE_CAPACITY_BYTES），僅顯示已使用容量。',
+      warnings: Array.isArray((usage as any).warnings) ? (usage as any).warnings : [],
     });
   } catch (e: any) {
     const detail = String(e?.message || e);
