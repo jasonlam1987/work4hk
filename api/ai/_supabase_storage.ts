@@ -203,6 +203,28 @@ export const getSupabaseObjectSize = async (objectPath: string) => {
   return Number.isFinite(len) && len > 0 ? len : 0;
 };
 
+export const getSupabaseObjectSizeByRange = async (objectPath: string) => {
+  if (!enabled) throw new Error('supabase storage not configured');
+  const url = `${supabaseUrl}/storage/v1/object/${encodePath(bucket)}/${encodePath(objectPath)}`;
+  const resp = await fetch(url, {
+    method: 'GET',
+    headers: { ...baseHeaders(), Range: 'bytes=0-0' },
+  });
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => '');
+    throw new Error(`supabase range failed: ${resp.status} ${detail}`);
+  }
+  const contentRange = String(resp.headers.get('content-range') || '');
+  // e.g. bytes 0-0/12345
+  const m = contentRange.match(/\/(\d+)$/);
+  if (m) {
+    const n = Number(m[1]);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  const len = Number(resp.headers.get('content-length') || 0);
+  return Number.isFinite(len) && len > 0 ? len : 0;
+};
+
 export const getSupabaseObjectInfoSize = async (objectPath: string) => {
   if (!enabled) throw new Error('supabase storage not configured');
   const url = `${supabaseUrl}/storage/v1/object/info/${encodePath(bucket)}/${encodePath(objectPath)}`;

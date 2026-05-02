@@ -1,6 +1,7 @@
 import {
   getSupabaseObjectInfoSize,
   getSupabaseObjectSize,
+  getSupabaseObjectSizeByRange,
   isSupabaseStorageEnabled,
   listSupabaseStorageRecursive,
 } from './_supabase_storage.js';
@@ -49,6 +50,27 @@ const parseFirstMetric = (text: string, names: string[]) => {
   return null;
 };
 
+const parseMetricLabelNumeric = (text: string, labelHints: string[]) => {
+  const lines = String(text || '').split(/\r?\n/);
+  const hints = labelHints.map((v) => String(v).toLowerCase());
+  for (const line of lines) {
+    const labelsMatch = line.match(/\{([^}]*)\}/);
+    if (!labelsMatch) continue;
+    const labelsText = labelsMatch[1];
+    const pairs = labelsText.match(/([a-zA-Z0-9_]+)=\"([^\"]*)\"/g) || [];
+    for (const p of pairs) {
+      const m = p.match(/^([a-zA-Z0-9_]+)=\"([^\"]*)\"$/);
+      if (!m) continue;
+      const key = String(m[1] || '').toLowerCase();
+      const raw = String(m[2] || '');
+      if (!hints.some((h) => key.includes(h))) continue;
+      const n = Number(raw);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  }
+  return null;
+};
+
 const readSupabaseMetrics = async () => {
   const supabaseUrl = String(process.env.SUPABASE_URL || '').trim();
   const serviceRoleKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
@@ -63,7 +85,9 @@ const readSupabaseMetrics = async () => {
   }
   const text = await resp.text();
   const usedBytes = parseFirstMetric(text, ['storage_size_bytes', 'storage_objects_size_bytes', 'supabase_storage_size_bytes']);
-  const capacityBytes = parseFirstMetric(text, ['storage_quota_bytes', 'storage_limit_bytes', 'storage_max_bytes']);
+  const capacityBytes =
+    parseFirstMetric(text, ['storage_quota_bytes', 'storage_limit_bytes', 'storage_max_bytes']) ??
+    parseMetricLabelNumeric(text, ['quota', 'limit', 'capacity', 'max']);
   const fileCount = parseFirstMetric(text, ['storage_objects_total', 'storage_objects_count']);
   return { usedBytes, capacityBytes, fileCount };
 };
@@ -131,6 +155,13 @@ const readSupabaseUsage = async () => {
         if (!Number.isFinite(size) || size <= 0) {
           try {
             size = await getSupabaseObjectSize(objectPath);
+          } catch {
+            size = 0;
+          }
+        }
+        if (!Number.isFinite(size) || size <= 0) {
+          try {
+            size = await getSupabaseObjectSizeByRange(objectPath);
           } catch {
             size = 0;
           }
