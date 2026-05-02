@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Search, Edit2, Loader2, RefreshCw, Trash2, FolderOpen, UploadCloud, Download, FileText } from 'lucide-react';
-import { Approval, getApprovals, createApproval, updateApproval, deleteApproval, ApprovalCreate, DEPARTMENT_OPTIONS, QuotaDetail, getApprovalQuotaDetails, getApprovalQuotaMap, setApprovalQuotaDetails, appendApprovalVersionLog } from '../api/approvals';
+import { Approval, getApprovals, createApproval, updateApproval, deleteApproval, ApprovalCreate, DEPARTMENT_OPTIONS, QuotaDetail, getApprovalQuotaDetails, getApprovalQuotaMap, setApprovalQuotaDetails, appendApprovalVersionLog, countQuotaSlots, expandQuotaSeqRange } from '../api/approvals';
 import { Employer, getEmployers } from '../api/employers';
 import { Partner, getPartners } from '../api/settings';
 import Modal from '../components/Modal';
@@ -34,7 +34,8 @@ interface StoredApprovalFile {
 }
 
 type QuotaDetailForm = {
-  quota_seq: string;
+  quota_seq_start: string;
+  quota_seq_end: string;
   work_location_1: string;
   work_location_2: string;
   work_location_3: string;
@@ -125,7 +126,8 @@ const initialQuotaApplicationForm = (): QuotaApplicationForm => ({
 });
 
 const emptyQuotaRow = (): QuotaDetailForm => ({
-  quota_seq: '',
+  quota_seq_start: '',
+  quota_seq_end: '',
   work_location_1: '',
   work_location_2: '',
   work_location_3: '',
@@ -689,7 +691,8 @@ const Approvals: React.FC = () => {
       const title = String(job?.post_name || '').trim();
       for (let i = 0; i < count; i += 1) {
         rows.push({
-          quota_seq: normalizeSeq4(String(seq)),
+          quota_seq_start: normalizeSeq4(String(seq)),
+          quota_seq_end: normalizeSeq4(String(seq)),
           work_location_1: location1,
           work_location_2: location2,
           work_location_3: location3,
@@ -860,7 +863,8 @@ const Approvals: React.FC = () => {
     setQuotaDetails(
       existingQuotas.length > 0
         ? existingQuotas.map(q => ({
-            quota_seq: q.quota_seq,
+            quota_seq_start: String((q as any).quota_seq_start || q.quota_seq || ''),
+            quota_seq_end: String((q as any).quota_seq_end || q.quota_seq || ''),
             work_location_1: q.work_locations?.[0] || q.work_location || '',
             work_location_2: q.work_locations?.[1] || '',
             work_location_3: q.work_locations?.[2] || '',
@@ -1133,10 +1137,16 @@ const Approvals: React.FC = () => {
     if (rows.length === 0) return { ok: false, message: '請至少新增一個配額數量' };
     const seqSet = new Set<string>();
     for (const r of rows) {
-      const seq = String(r.quota_seq || '').replace(/[^\d]/g, '').padStart(4, '0').slice(-4);
-      if (!seq) return { ok: false, message: '配額序號為必填（4位數字）' };
-      if (seqSet.has(seq)) return { ok: false, message: `配額序號重複：${seq}` };
-      seqSet.add(seq);
+      const start = normalizeSeq4(String(r.quota_seq_start || ''));
+      const end = normalizeSeq4(String(r.quota_seq_end || ''));
+      if (!start || !end) return { ok: false, message: '配額序號範圍為必填（4位數字）' };
+      if (Number(start) > Number(end)) return { ok: false, message: `配額序號範圍無效：${start}-${end}` };
+      const expanded = expandQuotaSeqRange({ quota_seq_start: start, quota_seq_end: end, quota_seq: start });
+      if (expanded.length === 0) return { ok: false, message: `配額序號範圍無效：${start}-${end}` };
+      for (const seq of expanded) {
+        if (seqSet.has(seq)) return { ok: false, message: `配額序號重複：${seq}` };
+        seqSet.add(seq);
+      }
       const loc1 = String(r.work_location_1 || '').trim();
       const loc2 = String(r.work_location_2 || '').trim();
       const loc3 = String(r.work_location_3 || '').trim();
@@ -1155,7 +1165,9 @@ const Approvals: React.FC = () => {
     return quotaDetails
       .filter(r => !r._deleted)
       .map((r) => ({
-        quota_seq: String(r.quota_seq || '').replace(/[^\d]/g, '').padStart(4, '0').slice(-4),
+        quota_seq: normalizeSeq4(String(r.quota_seq_start || '')),
+        quota_seq_start: normalizeSeq4(String(r.quota_seq_start || '')),
+        quota_seq_end: normalizeSeq4(String(r.quota_seq_end || '')),
         work_location: String(r.work_location_1 || '').trim(),
         work_locations: [
           String(r.work_location_1 || '').trim(),
@@ -1418,7 +1430,7 @@ const Approvals: React.FC = () => {
                       {approval.signatory_name || '-'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-apple-dark">
-                      {(quotaMap[String(approval.id)] || []).length} 個
+                      {countQuotaSlots(quotaMap[String(approval.id)] || [])} 個
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         {formatDateDisplay((approval as any).expiry_date)}
@@ -1767,13 +1779,15 @@ const Approvals: React.FC = () => {
                 onClick={() => {
                   const idx = quotaDeleteTarget;
                   if (idx === null) return;
-                  const seq = quotaDetails[idx]?.quota_seq || `row-${idx + 1}`;
+                  const seqStart = quotaDetails[idx]?.quota_seq_start || '';
+                  const seqEnd = quotaDetails[idx]?.quota_seq_end || '';
+                  const seq = seqStart || seqEnd ? `${normalizeSeq4(seqStart)}-${normalizeSeq4(seqEnd || seqStart)}` : `row-${idx + 1}`;
                   setQuotaDetails(prev => prev.filter((_, i) => i !== idx));
                   if (isEditing && selectedId) {
                     appendApprovalVersionLog({
                       approval_id: selectedId,
                       action: 'quota_deleted',
-                      detail: `刪除配額數量：序號 ${String(seq).padStart(4, '0')}`,
+                      detail: `刪除配額數量：序號範圍 ${String(seq)}`,
                       operator: 'admin',
                     });
                   }
@@ -2213,21 +2227,41 @@ const Approvals: React.FC = () => {
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">配額序號 *</label>
+                      <label className="block text-xs text-gray-500 mb-1">配額序號範圍（起）*</label>
                       <input
                         type="text"
-                        value={row.quota_seq}
+                        value={row.quota_seq_start}
                         onChange={(e) => {
                           const v = e.target.value.replace(/[^\d]/g, '').slice(0, 4);
-                          updateQuotaRow(idx, { quota_seq: v });
+                          updateQuotaRow(idx, { quota_seq_start: v });
                         }}
                         onBlur={() => {
-                          updateQuotaRow(idx, { quota_seq: row.quota_seq ? row.quota_seq.padStart(4, '0') : '' });
+                          updateQuotaRow(idx, { quota_seq_start: row.quota_seq_start ? row.quota_seq_start.padStart(4, '0') : '' });
                         }}
                         placeholder="0001"
                         className="w-full px-3 py-2 border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50"
                         required
                       />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">配額序號範圍（止）*</label>
+                      <input
+                        type="text"
+                        value={row.quota_seq_end}
+                        onChange={(e) => {
+                          const v = e.target.value.replace(/[^\d]/g, '').slice(0, 4);
+                          updateQuotaRow(idx, { quota_seq_end: v });
+                        }}
+                        onBlur={() => {
+                          updateQuotaRow(idx, { quota_seq_end: row.quota_seq_end ? row.quota_seq_end.padStart(4, '0') : '' });
+                        }}
+                        placeholder="0005"
+                        className="w-full px-3 py-2 border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50"
+                        required
+                      />
+                      <div className="text-[11px] text-gray-500 mt-1">
+                        範圍：{normalizeSeq4(row.quota_seq_start || '') || '0000'} - {normalizeSeq4(row.quota_seq_end || '') || '0000'}
+                      </div>
                     </div>
                     <div>
                       <label className="block text-xs text-gray-500 mb-1">工作地點1 *</label>

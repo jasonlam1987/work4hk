@@ -21,6 +21,8 @@ export type ApprovalCreate = Partial<Omit<Approval, 'id' | 'employer_name' | 'em
 
 export type QuotaDetail = {
   quota_seq: string;
+  quota_seq_start?: string;
+  quota_seq_end?: string;
   work_location: string;
   work_locations?: string[];
   job_title: string;
@@ -71,6 +73,30 @@ const calcExpiryDate = (issueDate: string) => {
   const exp = new Date(d);
   exp.setMonth(exp.getMonth() + 12);
   return exp.toISOString().slice(0, 10);
+};
+
+const normalizeSeq4 = (v: any) => String(v || '').replace(/[^\d]/g, '').padStart(4, '0').slice(-4);
+
+export const expandQuotaSeqRange = (detail: Partial<QuotaDetail>): string[] => {
+  const startRaw = String((detail as any)?.quota_seq_start || (detail as any)?.quota_seq || '').trim();
+  const endRaw = String((detail as any)?.quota_seq_end || (detail as any)?.quota_seq || '').trim();
+  const start = normalizeSeq4(startRaw);
+  const end = normalizeSeq4(endRaw);
+  if (!start || !end) return [];
+  const startNum = Number(start);
+  const endNum = Number(end);
+  if (!Number.isFinite(startNum) || !Number.isFinite(endNum)) return [];
+  const low = Math.min(startNum, endNum);
+  const high = Math.max(startNum, endNum);
+  const out: string[] = [];
+  for (let n = low; n <= high; n += 1) {
+    out.push(String(n).padStart(4, '0'));
+  }
+  return out;
+};
+
+export const countQuotaSlots = (details: QuotaDetail[]) => {
+  return (Array.isArray(details) ? details : []).reduce((sum, q) => sum + Math.max(1, expandQuotaSeqRange(q).length), 0);
 };
 
 const readQuotaMap = (): Record<string, QuotaDetail[]> => {

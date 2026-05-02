@@ -4,7 +4,7 @@ import clsx from 'clsx';
 import Modal from '../components/Modal';
 import { Worker, WorkerCreate, createWorker, deleteWorker, updateWorker } from '../api/workers';
 import { Employer } from '../api/employers';
-import { Approval, getApprovalQuotaDetails, QuotaDetail } from '../api/approvals';
+import { Approval, expandQuotaSeqRange, getApprovalQuotaDetails, QuotaDetail } from '../api/approvals';
 import { WorkerEducation, WorkerProfile, WorkerWorkExperience, getWorkerProfile, setWorkerProfile } from '../utils/workerProfile';
 import { WorkerFileCategory, WorkerFileMeta, uploadWorkerFile } from '../api/workerFiles';
 import { downloadManagedFile, MAX_UPLOAD_SIZE } from '../api/files';
@@ -245,13 +245,13 @@ const Workers: React.FC = () => {
       if (seq) occupiedSeqSet.add(seq);
     }
     const currentSeq = String(selectedQuotaSeq || '').replace(/[^\d]/g, '').padStart(4, '0').slice(-4);
-    return selectedApprovalQuotaDetails
-      .map(q => ({
-        seq: String(q.quota_seq || '').replace(/[^\d]/g, '').padStart(4, '0').slice(-4),
+    const expanded = selectedApprovalQuotaDetails.flatMap((q) =>
+      expandQuotaSeqRange(q).map((seq) => ({
+        seq,
         detail: q,
       }))
-      .filter(x => x.seq)
-      .filter(x => !occupiedSeqSet.has(x.seq) || x.seq === currentSeq);
+    );
+    return expanded.filter(x => !occupiedSeqSet.has(x.seq) || x.seq === currentSeq);
   }, [selectedApprovalQuotaDetails, workers, approvalId, selectedId, selectedQuotaSeq]);
 
   const selectedQuotaDetail = useMemo(() => {
