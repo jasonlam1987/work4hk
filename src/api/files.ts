@@ -67,10 +67,11 @@ const getUserRoleHeader = () => {
 
 const getAuthHeaders = () => {
   const identity = getAuthIdentity();
+  const userName = String(identity.userName || '').trim();
   return {
     'x-user-role': getUserRoleHeader(),
     'x-user-id': String(identity.userId || ''),
-    'x-user-name': String(identity.userName || ''),
+    'x-user-name': encodeURIComponent(userName),
   };
 };
 

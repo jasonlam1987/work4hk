@@ -27,7 +27,15 @@ const verifyRole = (req: any) => {
   return role.includes('admin') || role.includes('manager');
 };
 const parseUserId = (req: any) => String(req?.headers?.['x-user-id'] || '').trim();
-const parseUserName = (req: any) => String(req?.headers?.['x-user-name'] || '').trim();
+const parseUserName = (req: any) => {
+  const raw = String(req?.headers?.['x-user-name'] || '').trim();
+  if (!raw) return '';
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+};
 
 const readJsonBody = async (req: any) => {
   const chunks: Buffer[] = [];
