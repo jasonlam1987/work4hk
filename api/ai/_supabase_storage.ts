@@ -159,3 +159,15 @@ export const removeFromSupabaseStorage = async (objectPath: string) => {
 };
 
 export const getSupabaseStorageBucket = () => bucket;
+
+export const getSupabaseObjectSize = async (objectPath: string) => {
+  if (!enabled) throw new Error('supabase storage not configured');
+  const url = `${supabaseUrl}/storage/v1/object/${encodePath(bucket)}/${encodePath(objectPath)}`;
+  const resp = await fetch(url, { method: 'HEAD', headers: baseHeaders() });
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => '');
+    throw new Error(`supabase head failed: ${resp.status} ${detail}`);
+  }
+  const len = Number(resp.headers.get('content-length') || 0);
+  return Number.isFinite(len) && len > 0 ? len : 0;
+};

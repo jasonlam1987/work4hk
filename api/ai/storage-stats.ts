@@ -1,4 +1,4 @@
-import { isSupabaseStorageEnabled, listSupabaseStorageRecursive } from './_supabase_storage.js';
+import { getSupabaseObjectSize, isSupabaseStorageEnabled, listSupabaseStorageRecursive } from './_supabase_storage.js';
 
 export const config = {
   runtime: 'nodejs',
@@ -30,13 +30,25 @@ const toCapacityBytes = () => {
   };
 };
 
+const getFallbackSupabaseCapacity = () => ({
+  value: 1024 * 1024 * 1024,
+  source: 'SUPABASE_DEFAULT_ESTIMATE_1GB',
+});
+
 const readSupabaseUsage = async () => {
   let usedBytes = 0;
   let fileCount = 0;
   for (const moduleName of MODULES) {
     const rows = await listSupabaseStorageRecursive(`${moduleName}/`);
     for (const item of rows) {
-      const size = Number(item?.row?.metadata?.size || 0);
+      let size = Number((item as any)?.row?.metadata?.size || 0);
+      if (!Number.isFinite(size) || size <= 0) {
+        try {
+          size = await getSupabaseObjectSize(String(item?.objectPath || ''));
+        } catch {
+          size = 0;
+        }
+      }
       usedBytes += Number.isFinite(size) && size > 0 ? size : 0;
       fileCount += 1;
     }
@@ -60,7 +72,7 @@ export default async function handler(req: any, res: any) {
   try {
     const backend = isSupabaseStorageEnabled() ? 'supabase' : 'local';
     const usage = backend === 'supabase' ? await readSupabaseUsage() : await readLocalUsage();
-    const cap = toCapacityBytes();
+    const cap = toCapacityBytes() || (backend === 'supabase' ? getFallbackSupabaseCapacity() : null);
     const capacityBytes = cap?.value ?? null;
     const remainingBytes = capacityBytes ? Math.max(0, capacityBytes - usage.usedBytes) : null;
     const usageRatio = capacityBytes ? Number((usage.usedBytes / Math.max(1, capacityBytes)).toFixed(4)) : null;

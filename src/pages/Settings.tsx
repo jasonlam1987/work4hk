@@ -700,6 +700,11 @@ const Settings: React.FC = () => {
                     提示：請在線上伺服器設定 `FILE_STORAGE_CAPACITY_BYTES`（或 `SUPABASE_STORAGE_CAPACITY_BYTES`）以顯示總容量與剩餘容量。
                   </div>
                 )}
+                {!storageStatsError && storageStats?.capacity_source === 'SUPABASE_DEFAULT_ESTIMATE_1GB' && (
+                  <div className="mt-1 text-xs text-amber-700">
+                    目前總容量採用 Supabase 預設估算值 1 GB；如你的專案是付費方案，請改由環境變量設定精確容量。
+                  </div>
+                )}
               </div>
 
               <div className="mt-4 flex items-center gap-3">
