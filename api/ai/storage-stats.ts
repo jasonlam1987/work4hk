@@ -1,4 +1,5 @@
 import {
+  downloadFromSupabaseStorage,
   getSupabaseObjectInfoSize,
   getSupabaseObjectSize,
   getSupabaseObjectSizeByRange,
@@ -138,6 +139,7 @@ const readSupabaseUsage = async () => {
   let fileCount = 0;
   const byModule: Record<string, number> = { employers: 0, approvals: 0, workers: 0, other: 0 };
   const warnings: string[] = [];
+  let deepProbeCount = 0;
   for (const moduleName of MODULES) {
     try {
       const rows = await listSupabaseStorageRecursive(`${moduleName}/`);
@@ -163,6 +165,17 @@ const readSupabaseUsage = async () => {
           try {
             size = await getSupabaseObjectSizeByRange(objectPath);
           } catch {
+            size = 0;
+          }
+        }
+        // Last fallback for environments where HEAD/range/object-info do not return size.
+        if ((!Number.isFinite(size) || size <= 0) && deepProbeCount < 5) {
+          try {
+            deepProbeCount += 1;
+            const bytes = await downloadFromSupabaseStorage(objectPath);
+            size = Number(bytes?.length || 0);
+          } catch (e: any) {
+            warnings.push(`${moduleName}: deep_probe_failed ${String(e?.message || e || 'download_failed')}`);
             size = 0;
           }
         }
