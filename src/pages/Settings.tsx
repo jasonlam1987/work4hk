@@ -4,6 +4,9 @@ import clsx from 'clsx';
 import apiClient from '../api/client';
 import Modal from '../components/Modal';
 import JSZip from 'jszip';
+import { getEmployers } from '../api/employers';
+import { getApprovals } from '../api/approvals';
+import { getWorkers } from '../api/workers';
 import { 
   Partner, PartnerCreate, getPartners, createPartner, updatePartner
 } from '../api/settings';
@@ -35,6 +38,7 @@ type StorageStats = {
   file_count: number;
   used_bytes: number;
   capacity_bytes: number | null;
+  capacity_source?: string;
   remaining_bytes: number | null;
   usage_ratio: number | null;
   max_upload_size_bytes: number;
@@ -90,15 +94,11 @@ const Settings: React.FC = () => {
   const [apiKeys, setApiKeys] = useState({
     tencentSecretId: '',
     tencentSecretKey: '',
-    wechatAppId: '',
-    wechatAppSecret: '',
     authPrecheckToken: ''
   });
 
   const [showTencentSecretId, setShowTencentSecretId] = useState(false);
   const [showTencentSecretKey, setShowTencentSecretKey] = useState(false);
-  const [showWeChatAppId, setShowWeChatAppId] = useState(false);
-  const [showWeChatAppSecret, setShowWeChatAppSecret] = useState(false);
   const [showAuthPrecheckToken, setShowAuthPrecheckToken] = useState(false);
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null);
   const [storageStatsLoading, setStorageStatsLoading] = useState(false);
@@ -168,21 +168,46 @@ const Settings: React.FC = () => {
         alert('目前沒有可下載的附件');
         return;
       }
+      const [employers, approvals, workers] = await Promise.all([
+        getEmployers().catch(() => []),
+        getApprovals().catch(() => []),
+        getWorkers().catch(() => []),
+      ]);
+      const employerNameById = new Map<number, string>(
+        (employers || []).map((it: any) => [Number(it?.id || 0), String(it?.name || it?.english_name || '').trim()])
+      );
+      const approvalLabelById = new Map<number, string>(
+        (approvals || []).map((it: any) => [Number(it?.id || 0), String(it?.approval_number || '').trim()])
+      );
+      const workerNameById = new Map<number, string>(
+        (workers || []).map((it: any) => [Number(it?.id || 0), String(it?.labour_name || it?.pinyin_name || '').trim()])
+      );
       setBulkDownloadProgress({ done: 0, total: items.length });
       const zip = new JSZip();
       let done = 0;
+      let successCount = 0;
       for (const item of items) {
         const url = toBrowserDownloadUrl(item.download_url);
         if (!url) continue;
         try {
-          const resp = await fetch(url);
+          const resp = await fetch(url, { headers: authHeaders() as any });
           if (!resp.ok) continue;
           const blob = await resp.blob();
           const moduleName = safePathSegment(item.module || 'unknown_module');
-          const ownerSeg = `owner_${Number(item.owner_id || 0)}`;
+          const ownerId = Number(item.owner_id || 0);
+          const ownerLabel =
+            moduleName === 'employers'
+              ? employerNameById.get(ownerId) || `企業_${ownerId}`
+              : moduleName === 'approvals'
+                ? approvalLabelById.get(ownerId) || `批文_${ownerId}`
+                : moduleName === 'workers'
+                  ? workerNameById.get(ownerId) || `勞工_${ownerId}`
+                  : `owner_${ownerId}`;
+          const ownerSeg = safePathSegment(ownerLabel);
           const folderSeg = safePathSegment(item.folder || 'unknown_folder');
           const fileName = safePathSegment(item.original_name || `${item.uid}.bin`);
           zip.folder(moduleName)?.folder(ownerSeg)?.folder(folderSeg)?.file(fileName, blob);
+          successCount += 1;
         } catch {
           // Skip failed files and continue generating zip for available attachments.
         } finally {
@@ -191,6 +216,10 @@ const Settings: React.FC = () => {
         }
       }
 
+      if (successCount <= 0) {
+        alert('批量下載失敗：未能取得任何附件，請稍後重試。');
+        return;
+      }
       const zipBlob = await zip.generateAsync({ type: 'blob' });
       const d = new Date();
       const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}`;
@@ -202,7 +231,7 @@ const Settings: React.FC = () => {
       a.rel = 'noopener';
       a.click();
       setTimeout(() => URL.revokeObjectURL(href), 1000);
-      alert(`批量下載完成：共 ${items.length} 項（已打包為 ZIP）`);
+      alert(`批量下載完成：成功 ${successCount}/${items.length} 項（已打包為 ZIP）`);
     } catch (err: any) {
       const detail = err?.response?.data?.detail;
       alert(typeof detail === 'string' ? detail : '批量下載附件失敗');
@@ -584,57 +613,11 @@ const Settings: React.FC = () => {
             <div className="rounded-apple-sm border border-gray-200/60 bg-white/60 backdrop-blur-xl p-6 shadow-apple-sm">
               <h3 className="text-lg font-semibold text-gray-900 flex items-center">
                 <Key className="w-5 h-5 mr-2 text-apple-blue" />
-                微信登錄
+                登入預檢
               </h3>
-              <p className="text-sm text-gray-500 mt-1">用於登入頁面的「使用微信登錄」。</p>
-              <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <p className="text-sm text-gray-500 mt-1">僅保留登入前檢測賬戶用途；微信登入金鑰配置已移除。</p>
+              <div className="mt-5 grid grid-cols-1 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">WeChat AppId</label>
-                  <div className="relative">
-                    <input
-                      type={showWeChatAppId ? 'text' : 'password'}
-                      value={apiKeys.wechatAppId}
-                      onChange={(e) => setApiKeys({ ...apiKeys, wechatAppId: e.target.value })}
-                      placeholder="例如：wx..."
-                      className="w-full h-11 px-4 pr-10 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/40 focus:border-apple-blue transition-all"
-                    />
-                    <button
-                      type="button"
-                      aria-label={showWeChatAppId ? '隱藏 WeChat AppId' : '顯示 WeChat AppId'}
-                      aria-pressed={showWeChatAppId}
-                      onClick={() => setShowWeChatAppId(v => !v)}
-                      className="absolute inset-y-0 right-0 px-3 flex items-center text-gray-400 hover:text-gray-600"
-                      title={showWeChatAppId ? '隱藏' : '顯示'}
-                    >
-                      {showWeChatAppId ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">WeChat AppSecret</label>
-                  <div className="relative">
-                    <input
-                      type={showWeChatAppSecret ? 'text' : 'password'}
-                      value={apiKeys.wechatAppSecret}
-                      onChange={(e) => setApiKeys({ ...apiKeys, wechatAppSecret: e.target.value })}
-                      placeholder="例如：xxxx"
-                      className="w-full h-11 px-4 pr-10 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/40 focus:border-apple-blue transition-all"
-                    />
-                    <button
-                      type="button"
-                      aria-label={showWeChatAppSecret ? '隱藏 WeChat AppSecret' : '顯示 WeChat AppSecret'}
-                      aria-pressed={showWeChatAppSecret}
-                      onClick={() => setShowWeChatAppSecret(v => !v)}
-                      className="absolute inset-y-0 right-0 px-3 flex items-center text-gray-400 hover:text-gray-600"
-                      title={showWeChatAppSecret ? '隱藏' : '顯示'}
-                    >
-                      {showWeChatAppSecret ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-
-                <div className="sm:col-span-2">
                   <label className="block text-sm font-medium text-gray-700 mb-1">Auth Precheck Token</label>
                   <div className="relative">
                     <input
@@ -654,9 +637,6 @@ const Settings: React.FC = () => {
                     >
                       {showAuthPrecheckToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
-                  </div>
-                  <div className="text-xs text-gray-500 mt-2">
-                    回調地址：{window.location.origin}/auth/wechat/callback
                   </div>
                 </div>
               </div>
@@ -692,6 +672,9 @@ const Settings: React.FC = () => {
                   <div className="text-base font-semibold text-gray-900">
                     {storageStats?.capacity_bytes ? formatBytes(storageStats.capacity_bytes) : '未設定'}
                   </div>
+                  {storageStats?.capacity_source && (
+                    <div className="text-[11px] text-gray-500 mt-1">來源：{storageStats.capacity_source}</div>
+                  )}
                 </div>
                 <div className="rounded border border-gray-200 bg-white px-3 py-2">
                   <div className="text-xs text-gray-500">附件數量</div>
@@ -712,6 +695,11 @@ const Settings: React.FC = () => {
                 </div>
                 {storageStatsError && <div className="mt-2 text-xs text-red-600">{storageStatsError}</div>}
                 {!storageStatsError && storageStats?.note && <div className="mt-2 text-xs text-gray-500">{storageStats.note}</div>}
+                {!storageStatsError && !storageStats?.capacity_bytes && (
+                  <div className="mt-1 text-xs text-amber-700">
+                    提示：請在線上伺服器設定 `FILE_STORAGE_CAPACITY_BYTES`（或 `SUPABASE_STORAGE_CAPACITY_BYTES`）以顯示總容量與剩餘容量。
+                  </div>
+                )}
               </div>
 
               <div className="mt-4 flex items-center gap-3">

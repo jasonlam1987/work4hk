@@ -1,4 +1,4 @@
-import { isSupabaseStorageEnabled, listSupabaseStorageByPrefix } from './_supabase_storage.js';
+import { isSupabaseStorageEnabled, listSupabaseStorageRecursive } from './_supabase_storage.js';
 
 export const config = {
   runtime: 'nodejs',
@@ -19,28 +19,26 @@ const verifyRole = (req: any) => {
 };
 
 const toCapacityBytes = () => {
-  const raw = String(process.env.FILE_STORAGE_CAPACITY_BYTES || process.env.SUPABASE_STORAGE_CAPACITY_BYTES || '').trim();
+  const fromFile = String(process.env.FILE_STORAGE_CAPACITY_BYTES || '').trim();
+  const fromSupabase = String(process.env.SUPABASE_STORAGE_CAPACITY_BYTES || '').trim();
+  const raw = fromFile || fromSupabase;
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return null;
-  return Math.floor(n);
+  return {
+    value: Math.floor(n),
+    source: fromFile ? 'FILE_STORAGE_CAPACITY_BYTES' : 'SUPABASE_STORAGE_CAPACITY_BYTES',
+  };
 };
 
 const readSupabaseUsage = async () => {
   let usedBytes = 0;
   let fileCount = 0;
   for (const moduleName of MODULES) {
-    let offset = 0;
-    while (true) {
-      const rows = await listSupabaseStorageByPrefix(`${moduleName}/`, { limit: 1000, offset });
-      if (!Array.isArray(rows) || rows.length === 0) break;
-      for (const row of rows) {
-        if (!row || String(row?.id || '').endsWith('/')) continue;
-        const size = Number(row?.metadata?.size || 0);
-        usedBytes += Number.isFinite(size) && size > 0 ? size : 0;
-        fileCount += 1;
-      }
-      if (rows.length < 1000) break;
-      offset += rows.length;
+    const rows = await listSupabaseStorageRecursive(`${moduleName}/`);
+    for (const item of rows) {
+      const size = Number(item?.row?.metadata?.size || 0);
+      usedBytes += Number.isFinite(size) && size > 0 ? size : 0;
+      fileCount += 1;
     }
   }
   return { usedBytes, fileCount };
@@ -62,7 +60,8 @@ export default async function handler(req: any, res: any) {
   try {
     const backend = isSupabaseStorageEnabled() ? 'supabase' : 'local';
     const usage = backend === 'supabase' ? await readSupabaseUsage() : await readLocalUsage();
-    const capacityBytes = toCapacityBytes();
+    const cap = toCapacityBytes();
+    const capacityBytes = cap?.value ?? null;
     const remainingBytes = capacityBytes ? Math.max(0, capacityBytes - usage.usedBytes) : null;
     const usageRatio = capacityBytes ? Number((usage.usedBytes / Math.max(1, capacityBytes)).toFixed(4)) : null;
     return respond(res, 200, {
@@ -70,6 +69,7 @@ export default async function handler(req: any, res: any) {
       file_count: usage.fileCount,
       used_bytes: usage.usedBytes,
       capacity_bytes: capacityBytes,
+      capacity_source: cap?.source || '',
       remaining_bytes: remainingBytes,
       usage_ratio: usageRatio,
       max_upload_size_bytes: MAX_UPLOAD_SIZE_BYTES,
@@ -83,4 +83,3 @@ export default async function handler(req: any, res: any) {
     return respond(res, 500, { code: 'STORAGE_STATS_FAILED', error: 'Storage stats failed', detail });
   }
 }
-

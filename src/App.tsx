@@ -3,7 +3,6 @@ import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'r
 // EST Labor System Imports
 import Layout from './components/Layout';
 import Login from './pages/Login';
-import WeChatCallback from './pages/WeChatCallback';
 import Dashboard from './pages/Dashboard';
 import Users from './pages/Users';
 import Employers from './pages/Employers';
@@ -32,7 +31,6 @@ function App() {
     <Router>
       <Routes>
         <Route path="/login" element={<Login />} />
-        <Route path="/auth/wechat/callback" element={<WeChatCallback />} />
         
         <Route path="/" element={
           <PrivateRoute>

@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import { isSupabaseStorageEnabled, listSupabaseStorageByPrefix } from './_supabase_storage.js';
+import { isSupabaseStorageEnabled, listSupabaseStorageRecursive } from './_supabase_storage.js';
 
 export const config = {
   runtime: 'nodejs',
@@ -75,13 +75,11 @@ type ManifestItem = {
 const readSupabaseManifest = async () => {
   const out: ManifestItem[] = [];
   for (const moduleName of MODULES) {
-    let offset = 0;
-    while (true) {
-      const rows = await listSupabaseStorageByPrefix(`${moduleName}/`, { limit: 1000, offset });
-      if (!Array.isArray(rows) || rows.length === 0) break;
-      for (const row of rows) {
-        if (!row || String(row?.id || '').endsWith('/')) continue;
-        const objectPath = `${moduleName}/${String(row?.name || '')}`;
+    const rows = await listSupabaseStorageRecursive(`${moduleName}/`);
+    for (const rowWrap of rows) {
+      const row = rowWrap?.row as any;
+      const objectPath = String(rowWrap?.objectPath || '');
+      if (!objectPath) continue;
         const parts = objectPath.split('/');
         if (parts.length < 4) continue;
         const ownerId = Number(parts[1] || 0);
@@ -111,9 +109,6 @@ const readSupabaseManifest = async () => {
           uploader_name: parsedName.uploaderName || '',
           download_url: `/api/ai/files-download?t=${encodeURIComponent(token)}`,
         });
-      }
-      if (rows.length < 1000) break;
-      offset += rows.length;
     }
   }
   return out.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
@@ -161,4 +156,3 @@ export default async function handler(req: any, res: any) {
     return respond(res, 500, { code: 'FILES_BULK_MANIFEST_FAILED', error: 'Files manifest failed', detail });
   }
 }
-

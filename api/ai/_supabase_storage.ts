@@ -32,6 +32,16 @@ const baseHeaders = () => ({
   Authorization: `Bearer ${supabaseServiceRoleKey}`,
 });
 
+export type SupabaseStorageListRow = {
+  name?: string;
+  id?: string;
+  metadata?: {
+    size?: number;
+    mimetype?: string;
+  };
+  created_at?: string;
+};
+
 export const getSupabaseObjectPath = (
   moduleName: string,
   ownerId: number,
@@ -67,6 +77,37 @@ export const listSupabaseStorageByPrefix = async (prefix: string, opts?: { limit
   }
   const json = await resp.json().catch(() => []);
   return Array.isArray(json) ? json : [];
+};
+
+export const listSupabaseStorageRecursive = async (rootPrefix: string) => {
+  if (!enabled) throw new Error('supabase storage not configured');
+  const out: Array<{ objectPath: string; row: SupabaseStorageListRow }> = [];
+  const queue = [String(rootPrefix || '')];
+  const visited = new Set<string>();
+  while (queue.length > 0) {
+    const prefix = queue.shift() || '';
+    if (visited.has(prefix)) continue;
+    visited.add(prefix);
+    let offset = 0;
+    while (true) {
+      const rows = (await listSupabaseStorageByPrefix(prefix, { limit: 1000, offset })) as SupabaseStorageListRow[];
+      if (!Array.isArray(rows) || rows.length === 0) break;
+      for (const row of rows) {
+        const name = String(row?.name || '');
+        if (!name) continue;
+        const nextPath = `${prefix}${name}`;
+        const isFolder = String(row?.id || '').endsWith('/');
+        if (isFolder) {
+          queue.push(`${nextPath}/`);
+        } else {
+          out.push({ objectPath: nextPath, row });
+        }
+      }
+      if (rows.length < 1000) break;
+      offset += rows.length;
+    }
+  }
+  return out;
 };
 
 export const uploadToSupabaseStorage = async (
