@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import { isSupabaseStorageEnabled, listSupabaseStorageObjects } from './_supabase_storage.js';
+import { isSupabaseStorageEnabled, listSupabaseStorageRecursive } from './_supabase_storage.js';
 
 export const config = {
   runtime: 'nodejs',
@@ -74,17 +74,14 @@ type ManifestItem = {
 
 const readSupabaseManifest = async () => {
   const out: ManifestItem[] = [];
-  let offset = 0;
-  while (true) {
-    const rows = await listSupabaseStorageObjects({ limit: 1000, offset });
-    if (!Array.isArray(rows) || rows.length === 0) break;
-    for (const row of rows as any[]) {
-      const objectPath = String(row?.name || '');
+  for (const moduleName of MODULES) {
+    const rows = await listSupabaseStorageRecursive(`${moduleName}/`);
+    for (const rowWrap of rows) {
+      const row = rowWrap?.row as any;
+      const objectPath = String(rowWrap?.objectPath || '');
       if (!objectPath) continue;
       const parts = objectPath.split('/');
       if (parts.length < 4) continue;
-      const moduleName = String(parts[0] || '');
-      if (!MODULES.includes(moduleName as any)) continue;
       const ownerId = Number(parts[1] || 0);
       const folder = decodeFolder(parts[2] || '');
       const nameRaw = parts.slice(3).join('/');
@@ -113,8 +110,6 @@ const readSupabaseManifest = async () => {
         download_url: `/api/ai/files-download?t=${encodeURIComponent(token)}`,
       });
     }
-    if (rows.length < 1000) break;
-    offset += rows.length;
   }
   return out.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
 };

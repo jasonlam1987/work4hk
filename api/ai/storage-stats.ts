@@ -1,4 +1,4 @@
-import { isSupabaseStorageEnabled, listSupabaseStorageObjects } from './_supabase_storage.js';
+import { getSupabaseObjectSize, isSupabaseStorageEnabled, listSupabaseStorageRecursive } from './_supabase_storage.js';
 
 export const config = {
   runtime: 'nodejs',
@@ -67,22 +67,25 @@ const readSupabaseUsage = async () => {
   let usedBytes = 0;
   let fileCount = 0;
   const byModule: Record<string, number> = { employers: 0, approvals: 0, workers: 0, other: 0 };
-  let offset = 0;
-  while (true) {
-    const rows = await listSupabaseStorageObjects({ limit: 1000, offset });
-    if (!Array.isArray(rows) || rows.length === 0) break;
-    for (const row of rows) {
-      const objectPath = String(row?.name || '');
+  for (const moduleName of MODULES) {
+    const rows = await listSupabaseStorageRecursive(`${moduleName}/`);
+    for (const item of rows) {
+      const objectPath = String(item?.objectPath || '');
       if (!objectPath) continue;
-      const size = Number((row as any)?.metadata?.size || 0);
+      let size = Number((item as any)?.row?.metadata?.size || 0);
+      if (!Number.isFinite(size) || size <= 0) {
+        try {
+          size = await getSupabaseObjectSize(objectPath);
+        } catch {
+          size = 0;
+        }
+      }
       usedBytes += Number.isFinite(size) && size > 0 ? size : 0;
       fileCount += 1;
       const top = objectPath.split('/')[0];
       if (top === 'employers' || top === 'approvals' || top === 'workers') byModule[top] += 1;
       else byModule.other += 1;
     }
-    if (rows.length < 1000) break;
-    offset += rows.length;
   }
   return { usedBytes, fileCount, byModule };
 };
