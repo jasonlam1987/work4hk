@@ -46,16 +46,18 @@ export const getSupabaseObjectPath = (
 export const getSupabaseFolderPrefix = (moduleName: string, ownerId: number, folder: string) =>
   `${moduleName}/${ownerId}/${folderSegment(folder)}/`;
 
-export const listSupabaseStorageByPrefix = async (prefix: string) => {
+export const listSupabaseStorageByPrefix = async (prefix: string, opts?: { limit?: number; offset?: number }) => {
   if (!enabled) throw new Error('supabase storage not configured');
+  const limit = Math.max(1, Math.min(1000, Number(opts?.limit || 1000)));
+  const offset = Math.max(0, Number(opts?.offset || 0));
   const url = `${supabaseUrl}/storage/v1/object/list/${encodePath(bucket)}`;
   const resp = await fetch(url, {
     method: 'POST',
     headers: { ...baseHeaders(), 'Content-Type': 'application/json' },
     body: JSON.stringify({
       prefix,
-      limit: 1000,
-      offset: 0,
+      limit,
+      offset,
       sortBy: { column: 'created_at', order: 'desc' },
     }),
   });

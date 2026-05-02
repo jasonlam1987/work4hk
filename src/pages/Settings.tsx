@@ -1,8 +1,9 @@
 import React, { useCallback, useRef, useState, useEffect } from 'react';
-import { Search, Plus, Edit2, Loader2, RefreshCw, Key, Eye, EyeOff, Trash2, Users2, Handshake, ScrollText } from 'lucide-react';
+import { Search, Plus, Edit2, Loader2, RefreshCw, Key, Eye, EyeOff, Trash2, Users2, Handshake, ScrollText, HardDrive, Download } from 'lucide-react';
 import clsx from 'clsx';
 import apiClient from '../api/client';
 import Modal from '../components/Modal';
+import JSZip from 'jszip';
 import { 
   Partner, PartnerCreate, getPartners, createPartner, updatePartner
 } from '../api/settings';
@@ -27,6 +28,29 @@ type HttpErrorLike = {
       detail?: unknown;
     };
   };
+};
+
+type StorageStats = {
+  backend: 'supabase' | 'local';
+  file_count: number;
+  used_bytes: number;
+  capacity_bytes: number | null;
+  remaining_bytes: number | null;
+  usage_ratio: number | null;
+  max_upload_size_bytes: number;
+  note?: string;
+};
+
+type BulkManifestItem = {
+  uid: string;
+  module: 'employers' | 'approvals' | 'workers' | string;
+  owner_id: number;
+  folder: string;
+  original_name: string;
+  mime_type: string;
+  size: number;
+  created_at: string;
+  download_url: string;
 };
 
 const Settings: React.FC = () => {
@@ -76,6 +100,117 @@ const Settings: React.FC = () => {
   const [showWeChatAppId, setShowWeChatAppId] = useState(false);
   const [showWeChatAppSecret, setShowWeChatAppSecret] = useState(false);
   const [showAuthPrecheckToken, setShowAuthPrecheckToken] = useState(false);
+  const [storageStats, setStorageStats] = useState<StorageStats | null>(null);
+  const [storageStatsLoading, setStorageStatsLoading] = useState(false);
+  const [storageStatsError, setStorageStatsError] = useState('');
+  const [bulkDownloading, setBulkDownloading] = useState(false);
+  const [bulkDownloadProgress, setBulkDownloadProgress] = useState({ done: 0, total: 0 });
+
+  const authHeaders = () => {
+    const identity = getAuthIdentity();
+    return {
+      'x-user-role': identity.roleKey || 'admin',
+      'x-user-id': String(identity.userId || ''),
+      'x-user-name': encodeURIComponent(String(identity.userName || '').trim()),
+    };
+  };
+
+  const formatBytes = (n: number | null | undefined) => {
+    const size = Number(n || 0);
+    if (!Number.isFinite(size) || size <= 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const idx = Math.min(units.length - 1, Math.floor(Math.log(size) / Math.log(1024)));
+    const value = size / Math.pow(1024, idx);
+    return `${value.toFixed(value >= 100 || idx === 0 ? 0 : value >= 10 ? 1 : 2)} ${units[idx]}`;
+  };
+
+  const safePathSegment = (input: string) =>
+    String(input || '')
+      .trim()
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .replace(/\s+/g, ' ')
+      .slice(0, 120) || 'unknown';
+
+  const toBrowserDownloadUrl = (downloadUrl: string) => {
+    const raw = String(downloadUrl || '').trim();
+    if (!raw) return raw;
+    if (/^https?:\/\//i.test(raw)) return raw;
+    if (raw.startsWith('/api/')) return raw;
+    if (raw.startsWith('/ai/')) return `/api${raw}`;
+    return raw.startsWith('/') ? raw : `/${raw}`;
+  };
+
+  const fetchStorageStats = useCallback(async () => {
+    setStorageStatsLoading(true);
+    setStorageStatsError('');
+    try {
+      const res = await apiClient.get<StorageStats>('/ai/storage-stats', { headers: authHeaders() });
+      setStorageStats(res.data || null);
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      setStorageStats(null);
+      setStorageStatsError(typeof detail === 'string' ? detail : '讀取儲存容量失敗');
+    } finally {
+      setStorageStatsLoading(false);
+    }
+  }, []);
+
+  const handleBulkDownloadAttachments = async () => {
+    if (bulkDownloading) return;
+    setBulkDownloading(true);
+    setBulkDownloadProgress({ done: 0, total: 0 });
+    try {
+      const res = await apiClient.get<{ total: number; items: BulkManifestItem[] }>('/ai/files-bulk-manifest', {
+        headers: authHeaders(),
+      });
+      const items = Array.isArray(res.data?.items) ? res.data.items : [];
+      if (items.length === 0) {
+        alert('目前沒有可下載的附件');
+        return;
+      }
+      setBulkDownloadProgress({ done: 0, total: items.length });
+      const zip = new JSZip();
+      let done = 0;
+      for (const item of items) {
+        const url = toBrowserDownloadUrl(item.download_url);
+        if (!url) continue;
+        try {
+          const resp = await fetch(url);
+          if (!resp.ok) continue;
+          const blob = await resp.blob();
+          const moduleName = safePathSegment(item.module || 'unknown_module');
+          const ownerSeg = `owner_${Number(item.owner_id || 0)}`;
+          const folderSeg = safePathSegment(item.folder || 'unknown_folder');
+          const fileName = safePathSegment(item.original_name || `${item.uid}.bin`);
+          zip.folder(moduleName)?.folder(ownerSeg)?.folder(folderSeg)?.file(fileName, blob);
+        } catch {
+          // Skip failed files and continue generating zip for available attachments.
+        } finally {
+          done += 1;
+          setBulkDownloadProgress({ done, total: items.length });
+        }
+      }
+
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      const d = new Date();
+      const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}`;
+      const fileName = `attachments-backup-${stamp}.zip`;
+      const href = URL.createObjectURL(zipBlob);
+      const a = document.createElement('a');
+      a.href = href;
+      a.download = fileName;
+      a.rel = 'noopener';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(href), 1000);
+      alert(`批量下載完成：共 ${items.length} 項（已打包為 ZIP）`);
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      alert(typeof detail === 'string' ? detail : '批量下載附件失敗');
+    } finally {
+      setBulkDownloading(false);
+      setBulkDownloadProgress({ done: 0, total: 0 });
+    }
+  };
 
   const fetchData = useCallback(async () => {
     if (activeTab === 'audit_logs') {
@@ -104,6 +239,7 @@ const Settings: React.FC = () => {
           }
         });
       }
+      fetchStorageStats();
       return;
     }
 
@@ -136,7 +272,7 @@ const Settings: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [activeTab, search]);
+  }, [activeTab, search, fetchStorageStats]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -257,7 +393,7 @@ const Settings: React.FC = () => {
           headers: {
             'x-user-role': identity.roleKey || 'admin',
             'x-user-id': identity.userId || '',
-            'x-user-name': identity.userName || '',
+            'x-user-name': encodeURIComponent(String(identity.userName || '').trim()),
             'x-csrf-token': decodeURIComponent(csrfToken || ''),
           },
         }
@@ -523,6 +659,76 @@ const Settings: React.FC = () => {
                     回調地址：{window.location.origin}/auth/wechat/callback
                   </div>
                 </div>
+              </div>
+            </div>
+
+            <div className="rounded-apple-sm border border-gray-200/60 bg-white/60 backdrop-blur-xl p-6 shadow-apple-sm">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 flex items-center">
+                    <HardDrive className="w-5 h-5 mr-2 text-apple-blue" />
+                    線上附件儲存容量
+                  </h3>
+                  <p className="text-sm text-gray-500 mt-1">顯示目前附件已使用容量，並提供一鍵批量下載全部附件（ZIP）。</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={fetchStorageStats}
+                  className="h-10 px-3 border border-gray-200 rounded-apple-sm text-sm hover:bg-gray-50 inline-flex items-center gap-2"
+                  disabled={storageStatsLoading}
+                >
+                  <RefreshCw className={clsx('w-4 h-4', storageStatsLoading && 'animate-spin')} />
+                  <span>刷新容量</span>
+                </button>
+              </div>
+
+              <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="rounded border border-gray-200 bg-white px-3 py-2">
+                  <div className="text-xs text-gray-500">已使用</div>
+                  <div className="text-base font-semibold text-gray-900">{formatBytes(storageStats?.used_bytes)}</div>
+                </div>
+                <div className="rounded border border-gray-200 bg-white px-3 py-2">
+                  <div className="text-xs text-gray-500">總容量</div>
+                  <div className="text-base font-semibold text-gray-900">
+                    {storageStats?.capacity_bytes ? formatBytes(storageStats.capacity_bytes) : '未設定'}
+                  </div>
+                </div>
+                <div className="rounded border border-gray-200 bg-white px-3 py-2">
+                  <div className="text-xs text-gray-500">附件數量</div>
+                  <div className="text-base font-semibold text-gray-900">{Number(storageStats?.file_count || 0)}</div>
+                </div>
+              </div>
+
+              <div className="mt-3">
+                <div className="text-xs text-gray-500 mb-1">
+                  使用率：{storageStats?.usage_ratio != null ? `${(storageStats.usage_ratio * 100).toFixed(1)}%` : '未計算'}
+                  {' '}| 單檔上限：{formatBytes(storageStats?.max_upload_size_bytes)}
+                </div>
+                <div className="h-2 rounded bg-gray-100 overflow-hidden">
+                  <div
+                    className="h-full bg-apple-blue transition-all"
+                    style={{ width: `${Math.max(0, Math.min(100, Number((storageStats?.usage_ratio || 0) * 100)))}%` }}
+                  />
+                </div>
+                {storageStatsError && <div className="mt-2 text-xs text-red-600">{storageStatsError}</div>}
+                {!storageStatsError && storageStats?.note && <div className="mt-2 text-xs text-gray-500">{storageStats.note}</div>}
+              </div>
+
+              <div className="mt-4 flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleBulkDownloadAttachments}
+                  disabled={bulkDownloading}
+                  className="h-10 px-4 bg-apple-blue hover:bg-blue-600 text-white rounded-apple-sm font-medium transition-colors inline-flex items-center gap-2 disabled:opacity-70"
+                >
+                  {bulkDownloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                  <span>{bulkDownloading ? '打包中...' : '一鍵批量下載附件'}</span>
+                </button>
+                {bulkDownloading && (
+                  <span className="text-xs text-gray-500">
+                    進度：{bulkDownloadProgress.done}/{bulkDownloadProgress.total}
+                  </span>
+                )}
               </div>
             </div>
 
