@@ -42,6 +42,8 @@ type QuotaDetailForm = {
   job_title: string;
   monthly_salary: string;
   work_hours: string;
+  work_days_per_week: string;
+  work_hours_per_day: string;
   employment_months: string;
   import_group?: string;
   _deleted?: boolean;
@@ -134,10 +136,22 @@ const emptyQuotaRow = (): QuotaDetailForm => ({
   job_title: '',
   monthly_salary: '',
   work_hours: '',
+  work_days_per_week: '',
+  work_hours_per_day: '',
   employment_months: '',
 });
 
 const normalizeSeq4 = (v: string) => String(v || '').replace(/[^\d]/g, '').padStart(4, '0').slice(-4);
+const parseWeeklyDaily = (text: string) => {
+  const s = String(text || '').trim();
+  const m = s.match(/每週\s*([0-9]+)\s*天\s*[,，]?\s*每天\s*([0-9]+(?:\.[0-9]+)?)\s*小時/);
+  return {
+    days: m ? String(m[1] || '') : '',
+    hours: m ? String(m[2] || '') : '',
+  };
+};
+const composeWeeklyDaily = (days: string, hours: string) =>
+  `每週 ${String(days || '').trim()} 天，每天 ${String(hours || '').trim()} 小時`;
 
 const scheduleText = (slots?: Array<{ start?: string; end?: string }>) =>
   (Array.isArray(slots) ? slots : [])
@@ -687,6 +701,7 @@ const Approvals: React.FC = () => {
       const location2 = String(req?.work_addresses?.[1] || '').trim();
       const location3 = String(req?.work_addresses?.[2] || '').trim();
       const hours = scheduleText(req?.schedules);
+      const parsed = parseWeeklyDaily(hours);
       const months = String(job?.employment_months || '').replace(/[^\d]/g, '');
       const title = String(job?.post_name || '').trim();
       for (let i = 0; i < count; i += 1) {
@@ -699,6 +714,8 @@ const Approvals: React.FC = () => {
           job_title: title,
           monthly_salary: '0',
           work_hours: hours,
+          work_days_per_week: parsed.days,
+          work_hours_per_day: parsed.hours,
           employment_months: months,
           import_group: jobId ? `job-${jobId}` : undefined,
         });
@@ -871,6 +888,8 @@ const Approvals: React.FC = () => {
             job_title: q.job_title,
             monthly_salary: String(q.monthly_salary),
             work_hours: q.work_hours,
+            work_days_per_week: parseWeeklyDaily(String(q.work_hours || '')).days,
+            work_hours_per_day: parseWeeklyDaily(String(q.work_hours || '')).hours,
             employment_months: String(q.employment_months),
           }))
         : [emptyQuotaRow()]
@@ -1154,7 +1173,10 @@ const Approvals: React.FC = () => {
       if (!String(r.job_title || '').trim() || String(r.job_title).trim().length > 100) return { ok: false, message: '職位名稱為必填，且不得超過100字' };
       const salary = Number(formatSalary(r.monthly_salary));
       if (!Number.isInteger(salary) || salary < 0) return { ok: false, message: '每月工資為必填整數，且需大於或等於0' };
-      if (!String(r.work_hours || '').trim() || String(r.work_hours).trim().length > 100) return { ok: false, message: '工作時間為必填，且不得超過100字' };
+      const days = Number(String(r.work_days_per_week || '').replace(/[^\d]/g, ''));
+      const hours = Number(String(r.work_hours_per_day || '').replace(/[^\d.]/g, ''));
+      if (!Number.isInteger(days) || days < 1 || days > 7) return { ok: false, message: '每週工作天數請輸入 1-7 的整數' };
+      if (!Number.isFinite(hours) || hours <= 0 || hours > 24) return { ok: false, message: '每天工作小時請輸入 0-24 之間的數值' };
       const m = Number(String(r.employment_months || '').replace(/[^\d]/g, ''));
       if (!Number.isInteger(m) || m < 1 || m > 120) return { ok: false, message: '僱用期為必填月數，範圍1-120' };
     }
@@ -1176,7 +1198,7 @@ const Approvals: React.FC = () => {
         ].filter(Boolean).slice(0, 3),
         job_title: String(r.job_title || '').trim(),
         monthly_salary: Number(formatSalary(r.monthly_salary)),
-        work_hours: String(r.work_hours || '').trim(),
+        work_hours: composeWeeklyDaily(r.work_days_per_week, r.work_hours_per_day),
         employment_months: Number(String(r.employment_months || '').replace(/[^\d]/g, '')),
       }));
   };
@@ -2215,6 +2237,8 @@ const Approvals: React.FC = () => {
                             job_title: row.job_title,
                             monthly_salary: row.monthly_salary,
                             work_hours: row.work_hours,
+                            work_days_per_week: row.work_days_per_week,
+                            work_hours_per_day: row.work_hours_per_day,
                             employment_months: row.employment_months,
                           };
                           updateQuotaRow(idx, patch, { syncGroup: true });
@@ -2322,16 +2346,33 @@ const Approvals: React.FC = () => {
                       {row.monthly_salary && <div className="text-xs text-gray-500 mt-1">格式化：{prettySalary(row.monthly_salary)}</div>}
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">工作時間 *</label>
+                      <label className="block text-xs text-gray-500 mb-1">每週工作天數（X）*</label>
                       <input
                         type="text"
-                        maxLength={100}
-                        value={row.work_hours}
-                        onChange={(e) => updateQuotaRow(idx, { work_hours: e.target.value }, { syncGroup: true })}
-                        placeholder="每週 X 天，每天 Y 小時"
+                        inputMode="numeric"
+                        value={row.work_days_per_week}
+                        onChange={(e) => updateQuotaRow(idx, { work_days_per_week: e.target.value.replace(/[^\d]/g, '').slice(0, 1) }, { syncGroup: true })}
+                        placeholder="例如 6"
                         className="w-full px-3 py-2 border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50"
                         required
                       />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">每天工作小時（Y）*</label>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={row.work_hours_per_day}
+                        onChange={(e) => updateQuotaRow(idx, { work_hours_per_day: e.target.value.replace(/[^\d.]/g, '').slice(0, 5) }, { syncGroup: true })}
+                        placeholder="例如 8"
+                        className="w-full px-3 py-2 border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50"
+                        required
+                      />
+                      {row.work_days_per_week && row.work_hours_per_day && (
+                        <div className="text-[11px] text-gray-500 mt-1">
+                          {composeWeeklyDaily(row.work_days_per_week, row.work_hours_per_day)}
+                        </div>
+                      )}
                     </div>
                     <div>
                       <label className="block text-xs text-gray-500 mb-1">僱用期（月）*</label>
