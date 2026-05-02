@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import { isSupabaseStorageEnabled, listSupabaseStorageRecursive } from './_supabase_storage.js';
+import { isSupabaseStorageEnabled, listSupabaseStorageObjects } from './_supabase_storage.js';
 
 export const config = {
   runtime: 'nodejs',
@@ -74,42 +74,47 @@ type ManifestItem = {
 
 const readSupabaseManifest = async () => {
   const out: ManifestItem[] = [];
-  for (const moduleName of MODULES) {
-    const rows = await listSupabaseStorageRecursive(`${moduleName}/`);
-    for (const rowWrap of rows) {
-      const row = rowWrap?.row as any;
-      const objectPath = String(rowWrap?.objectPath || '');
+  let offset = 0;
+  while (true) {
+    const rows = await listSupabaseStorageObjects({ limit: 1000, offset });
+    if (!Array.isArray(rows) || rows.length === 0) break;
+    for (const row of rows as any[]) {
+      const objectPath = String(row?.name || '');
       if (!objectPath) continue;
-        const parts = objectPath.split('/');
-        if (parts.length < 4) continue;
-        const ownerId = Number(parts[1] || 0);
-        const folder = decodeFolder(parts[2] || '');
-        const nameRaw = parts.slice(3).join('/');
-        const parsedName = parseObjectName(nameRaw);
-        const mimeType = String(row?.metadata?.mimetype || 'application/octet-stream');
-        const size = Number(row?.metadata?.size || 0);
-        const createdAt = String(row?.created_at || new Date().toISOString());
-        const token = createDownloadToken({
-          uid: parsedName.uid,
-          object_path: objectPath,
-          mime_type: mimeType,
-          original_name: parsedName.originalName,
-          exp: Math.floor(Date.now() / 1000) + 10 * 60,
-        });
-        out.push({
-          uid: parsedName.uid,
-          module: moduleName,
-          owner_id: ownerId,
-          folder,
-          original_name: parsedName.originalName,
-          mime_type: mimeType,
-          size: Number.isFinite(size) ? size : 0,
-          created_at: createdAt,
-          uploader_id: parsedName.uploaderId || '',
-          uploader_name: parsedName.uploaderName || '',
-          download_url: `/api/ai/files-download?t=${encodeURIComponent(token)}`,
-        });
+      const parts = objectPath.split('/');
+      if (parts.length < 4) continue;
+      const moduleName = String(parts[0] || '');
+      if (!MODULES.includes(moduleName as any)) continue;
+      const ownerId = Number(parts[1] || 0);
+      const folder = decodeFolder(parts[2] || '');
+      const nameRaw = parts.slice(3).join('/');
+      const parsedName = parseObjectName(nameRaw);
+      const mimeType = String(row?.metadata?.mimetype || 'application/octet-stream');
+      const size = Number(row?.metadata?.size || 0);
+      const createdAt = String(row?.created_at || new Date().toISOString());
+      const token = createDownloadToken({
+        uid: parsedName.uid,
+        object_path: objectPath,
+        mime_type: mimeType,
+        original_name: parsedName.originalName,
+        exp: Math.floor(Date.now() / 1000) + 10 * 60,
+      });
+      out.push({
+        uid: parsedName.uid,
+        module: moduleName,
+        owner_id: ownerId,
+        folder,
+        original_name: parsedName.originalName,
+        mime_type: mimeType,
+        size: Number.isFinite(size) ? size : 0,
+        created_at: createdAt,
+        uploader_id: parsedName.uploaderId || '',
+        uploader_name: parsedName.uploaderName || '',
+        download_url: `/api/ai/files-download?t=${encodeURIComponent(token)}`,
+      });
     }
+    if (rows.length < 1000) break;
+    offset += rows.length;
   }
   return out.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
 };

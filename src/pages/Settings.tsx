@@ -36,6 +36,7 @@ type HttpErrorLike = {
 type StorageStats = {
   backend: 'supabase' | 'local';
   file_count: number;
+  by_module?: Record<string, number>;
   used_bytes: number;
   capacity_bytes: number | null;
   capacity_source?: string;
@@ -677,8 +678,13 @@ const Settings: React.FC = () => {
                   )}
                 </div>
                 <div className="rounded border border-gray-200 bg-white px-3 py-2">
-                  <div className="text-xs text-gray-500">附件數量</div>
+                  <div className="text-xs text-gray-500">附件數量（全站）</div>
                   <div className="text-base font-semibold text-gray-900">{Number(storageStats?.file_count || 0)}</div>
+                  {!!storageStats?.by_module && (
+                    <div className="text-[11px] text-gray-500 mt-1">
+                      企業 {Number(storageStats.by_module.employers || 0)} / 批文 {Number(storageStats.by_module.approvals || 0)} / 勞工 {Number(storageStats.by_module.workers || 0)}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -698,11 +704,6 @@ const Settings: React.FC = () => {
                 {!storageStatsError && !storageStats?.capacity_bytes && (
                   <div className="mt-1 text-xs text-amber-700">
                     提示：請在線上伺服器設定 `FILE_STORAGE_CAPACITY_BYTES`（或 `SUPABASE_STORAGE_CAPACITY_BYTES`）以顯示總容量與剩餘容量。
-                  </div>
-                )}
-                {!storageStatsError && storageStats?.capacity_source === 'SUPABASE_DEFAULT_ESTIMATE_1GB' && (
-                  <div className="mt-1 text-xs text-amber-700">
-                    目前總容量採用 Supabase 預設估算值 1 GB；如你的專案是付費方案，請改由環境變量設定精確容量。
                   </div>
                 )}
               </div>

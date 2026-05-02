@@ -1,4 +1,4 @@
-import { getSupabaseObjectSize, isSupabaseStorageEnabled, listSupabaseStorageRecursive } from './_supabase_storage.js';
+import { isSupabaseStorageEnabled, listSupabaseStorageObjects } from './_supabase_storage.js';
 
 export const config = {
   runtime: 'nodejs',
@@ -30,30 +30,61 @@ const toCapacityBytes = () => {
   };
 };
 
-const getFallbackSupabaseCapacity = () => ({
-  value: 1024 * 1024 * 1024,
-  source: 'SUPABASE_DEFAULT_ESTIMATE_1GB',
-});
+const parseFirstMetric = (text: string, names: string[]) => {
+  const lines = String(text || '').split(/\r?\n/);
+  for (const name of names) {
+    const re = new RegExp(`^${name}(?:\\{[^}]*\\})?\\s+([0-9.eE+-]+)$`);
+    for (const line of lines) {
+      const m = line.match(re);
+      if (!m) continue;
+      const n = Number(m[1]);
+      if (Number.isFinite(n) && n >= 0) return n;
+    }
+  }
+  return null;
+};
+
+const readSupabaseMetrics = async () => {
+  const supabaseUrl = String(process.env.SUPABASE_URL || '').trim();
+  const serviceRoleKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  if (!supabaseUrl || !serviceRoleKey) return { usedBytes: null as number | null, capacityBytes: null as number | null, fileCount: null as number | null };
+  const base = supabaseUrl.replace(/\/+$/, '');
+  const metricsUrl = `${base}/customer/v1/privileged/metrics`;
+  const basic = Buffer.from(`service_role:${serviceRoleKey}`, 'utf8').toString('base64');
+  const resp = await fetch(metricsUrl, { headers: { Authorization: `Basic ${basic}` } });
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => '');
+    throw new Error(`supabase metrics failed: ${resp.status} ${detail}`);
+  }
+  const text = await resp.text();
+  const usedBytes = parseFirstMetric(text, ['storage_size_bytes', 'storage_objects_size_bytes', 'supabase_storage_size_bytes']);
+  const capacityBytes = parseFirstMetric(text, ['storage_quota_bytes', 'storage_limit_bytes', 'storage_max_bytes']);
+  const fileCount = parseFirstMetric(text, ['storage_objects_total', 'storage_objects_count']);
+  return { usedBytes, capacityBytes, fileCount };
+};
 
 const readSupabaseUsage = async () => {
   let usedBytes = 0;
   let fileCount = 0;
-  for (const moduleName of MODULES) {
-    const rows = await listSupabaseStorageRecursive(`${moduleName}/`);
-    for (const item of rows) {
-      let size = Number((item as any)?.row?.metadata?.size || 0);
-      if (!Number.isFinite(size) || size <= 0) {
-        try {
-          size = await getSupabaseObjectSize(String(item?.objectPath || ''));
-        } catch {
-          size = 0;
-        }
-      }
+  const byModule: Record<string, number> = { employers: 0, approvals: 0, workers: 0, other: 0 };
+  let offset = 0;
+  while (true) {
+    const rows = await listSupabaseStorageObjects({ limit: 1000, offset });
+    if (!Array.isArray(rows) || rows.length === 0) break;
+    for (const row of rows) {
+      const objectPath = String(row?.name || '');
+      if (!objectPath) continue;
+      const size = Number((row as any)?.metadata?.size || 0);
       usedBytes += Number.isFinite(size) && size > 0 ? size : 0;
       fileCount += 1;
+      const top = objectPath.split('/')[0];
+      if (top === 'employers' || top === 'approvals' || top === 'workers') byModule[top] += 1;
+      else byModule.other += 1;
     }
+    if (rows.length < 1000) break;
+    offset += rows.length;
   }
-  return { usedBytes, fileCount };
+  return { usedBytes, fileCount, byModule };
 };
 
 const readLocalUsage = async () => {
@@ -62,7 +93,33 @@ const readLocalUsage = async () => {
   const idx = await local.readIndex();
   const rows = Object.values(idx.records || {}).filter((r: any) => !r.deleted_at);
   const usedBytes = rows.reduce((sum: number, r: any) => sum + Math.max(0, Number(r?.size || 0)), 0);
-  return { usedBytes, fileCount: rows.length };
+  const byModule: Record<string, number> = { employers: 0, approvals: 0, workers: 0, other: 0 };
+  for (const r of rows as any[]) {
+    const mod = String(r?.module || '');
+    if (mod === 'employers' || mod === 'approvals' || mod === 'workers') byModule[mod] += 1;
+    else byModule.other += 1;
+  }
+  return { usedBytes, fileCount: rows.length, byModule };
+};
+
+const readSupabaseUsageWithMetrics = async () => {
+  const usage = await readSupabaseUsage();
+  let metrics: { usedBytes: number | null; capacityBytes: number | null; fileCount: number | null } = {
+    usedBytes: null,
+    capacityBytes: null,
+    fileCount: null,
+  };
+  try {
+    metrics = await readSupabaseMetrics();
+  } catch {
+    // metrics endpoint may be unavailable in some regions/plans
+  }
+  return {
+    usedBytes: metrics.usedBytes ?? usage.usedBytes,
+    fileCount: metrics.fileCount != null ? Number(metrics.fileCount) : usage.fileCount,
+    byModule: usage.byModule,
+    capacityBytes: metrics.capacityBytes,
+  };
 };
 
 export default async function handler(req: any, res: any) {
@@ -71,23 +128,26 @@ export default async function handler(req: any, res: any) {
 
   try {
     const backend = isSupabaseStorageEnabled() ? 'supabase' : 'local';
-    const usage = backend === 'supabase' ? await readSupabaseUsage() : await readLocalUsage();
-    const cap = toCapacityBytes() || (backend === 'supabase' ? getFallbackSupabaseCapacity() : null);
-    const capacityBytes = cap?.value ?? null;
+    const usage = backend === 'supabase' ? await readSupabaseUsageWithMetrics() : await readLocalUsage();
+    const cap = toCapacityBytes();
+    const capacityBytes = (cap?.value ?? (backend === 'supabase' ? (usage as any).capacityBytes || null : null));
     const remainingBytes = capacityBytes ? Math.max(0, capacityBytes - usage.usedBytes) : null;
     const usageRatio = capacityBytes ? Number((usage.usedBytes / Math.max(1, capacityBytes)).toFixed(4)) : null;
     return respond(res, 200, {
       backend,
       file_count: usage.fileCount,
+      by_module: usage.byModule,
       used_bytes: usage.usedBytes,
       capacity_bytes: capacityBytes,
-      capacity_source: cap?.source || '',
+      capacity_source: cap?.source || (backend === 'supabase' && capacityBytes ? 'SUPABASE_METRICS_API' : ''),
       remaining_bytes: remainingBytes,
       usage_ratio: usageRatio,
       max_upload_size_bytes: MAX_UPLOAD_SIZE_BYTES,
       note: capacityBytes
         ? ''
-        : '未設定容量上限環境變量（FILE_STORAGE_CAPACITY_BYTES / SUPABASE_STORAGE_CAPACITY_BYTES），僅顯示已使用容量。',
+        : backend === 'supabase'
+          ? '未從 Supabase 指標 API 取得總容量上限，僅顯示已使用容量。'
+          : '未設定容量上限環境變量（FILE_STORAGE_CAPACITY_BYTES / SUPABASE_STORAGE_CAPACITY_BYTES），僅顯示已使用容量。',
     });
   } catch (e: any) {
     const detail = String(e?.message || e);

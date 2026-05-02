@@ -42,6 +42,17 @@ export type SupabaseStorageListRow = {
   created_at?: string;
 };
 
+export type SupabaseStorageObjectRow = {
+  name?: string;
+  metadata?: {
+    size?: number;
+    mimetype?: string;
+    [key: string]: any;
+  };
+  created_at?: string;
+  bucket_id?: string;
+};
+
 export const getSupabaseObjectPath = (
   moduleName: string,
   ownerId: number,
@@ -108,6 +119,26 @@ export const listSupabaseStorageRecursive = async (rootPrefix: string) => {
     }
   }
   return out;
+};
+
+export const listSupabaseStorageObjects = async (opts?: { limit?: number; offset?: number }) => {
+  if (!enabled) throw new Error('supabase storage not configured');
+  const limit = Math.max(1, Math.min(1000, Number(opts?.limit || 1000)));
+  const offset = Math.max(0, Number(opts?.offset || 0));
+  const params = new URLSearchParams();
+  params.set('select', 'name,metadata,created_at,bucket_id');
+  params.set('bucket_id', `eq.${bucket}`);
+  params.set('limit', String(limit));
+  params.set('offset', String(offset));
+  params.set('order', 'created_at.desc');
+  const url = `${supabaseUrl}/rest/v1/storage.objects?${params.toString()}`;
+  const resp = await fetch(url, { headers: baseHeaders() });
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => '');
+    throw new Error(`supabase objects list failed: ${resp.status} ${detail}`);
+  }
+  const json = await resp.json().catch(() => []);
+  return Array.isArray(json) ? (json as SupabaseStorageObjectRow[]) : [];
 };
 
 export const uploadToSupabaseStorage = async (
