@@ -532,6 +532,7 @@ const FinanceManagement: React.FC = () => {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">工人名字</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">狀態</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">在職日期</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">離職日期</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">所屬勞務公司</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">退款金額</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">成本合計</th>
@@ -543,13 +544,13 @@ const FinanceManagement: React.FC = () => {
             <tbody className="bg-white/30 divide-y divide-gray-200">
               {loading && rows.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-6 py-10 text-center">
+                  <td colSpan={10} className="px-6 py-10 text-center">
                     <Loader2 className="w-6 h-6 animate-spin text-apple-blue mx-auto" />
                   </td>
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-6 py-10 text-center text-gray-500">暫無財務資料</td>
+                  <td colSpan={10} className="px-6 py-10 text-center text-gray-500">暫無財務資料</td>
                 </tr>
               ) : (
                 rows.map((row) => (
@@ -557,6 +558,7 @@ const FinanceManagement: React.FC = () => {
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{row.worker_name || '-'}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{row.labour_status || '-'}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{toDateInputValue((row as any).on_duty_date) || '-'}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{toDateInputValue((row as any).departure_date) || '-'}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
                       <div className="flex items-center gap-2">
                         <span>{row.labour_company_name || '-'}</span>
@@ -641,6 +643,16 @@ const FinanceManagement: React.FC = () => {
             <input
               type="date"
               value={form.on_duty_date}
+              readOnly
+              className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-apple-sm text-gray-600"
+            />
+            <p className="text-xs text-gray-500 mt-1 ml-1">自動讀取勞工管理資料</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">離職日期</label>
+            <input
+              type="date"
+              value={selectedWorkerDepartureDate}
               readOnly
               className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-apple-sm text-gray-600"
             />
