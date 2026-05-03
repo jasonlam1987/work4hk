@@ -38,6 +38,13 @@ const toInputMoney = (value: unknown) => {
   return String(n);
 };
 
+const toInputInsuranceUnit = (totalValue: unknown, months: number) => {
+  const total = toMoney(totalValue);
+  const m = Number(months || 0);
+  if (m > 0) return total ? String(total / m) : '';
+  return total ? String(total) : '';
+};
+
 const cleanMoneyInput = (value: string) =>
   String(value || '')
     .replace(/[^\d.]/g, '')
@@ -127,17 +134,23 @@ const FinanceManagement: React.FC = () => {
     [eligibleWorkers, form.worker_id]
   );
 
+  const selectedWorkerMonths = useMemo(() => getWorkerEmploymentMonths(selectedWorker), [selectedWorker]);
+  const selectedInsuranceTotal = useMemo(() => {
+    const unit = toMoney(form.cost_insurance_fee);
+    const months = Number(selectedWorkerMonths || 0);
+    return months > 0 ? unit * months : unit;
+  }, [form.cost_insurance_fee, selectedWorkerMonths]);
+
   const computedProfit = useMemo(() => {
     const totalCost =
       toMoney(form.cost_visa_fee) +
       toMoney(form.cost_labour_fee) +
-      toMoney(form.cost_insurance_fee);
+      selectedInsuranceTotal;
     const totalIncome =
       toMoney(form.income_labour_fee) +
       toMoney(form.income_agency_fee);
     return totalIncome - totalCost;
-  }, [form]);
-  const selectedWorkerMonths = useMemo(() => getWorkerEmploymentMonths(selectedWorker), [selectedWorker]);
+  }, [form, selectedInsuranceTotal]);
 
   const loadData = async () => {
     setLoading(true);
@@ -173,6 +186,12 @@ const FinanceManagement: React.FC = () => {
       income_labour_fee: toInputMoney(record.income_labour_fee),
       income_agency_fee: toInputMoney(record.income_agency_fee),
     });
+    const worker = workers.find((x) => Number((x as any)?.id || 0) === Number(record.worker_id || 0));
+    const months = getWorkerEmploymentMonths(worker);
+    setForm((prev) => ({
+      ...prev,
+      cost_insurance_fee: toInputInsuranceUnit(record.cost_insurance_fee, months),
+    }));
     setIsModalOpen(true);
   };
 
@@ -218,7 +237,7 @@ const FinanceManagement: React.FC = () => {
         labour_company_name: String((worker as any)?.labour_company_name || profile?.labour_company_name || '').trim() || undefined,
         cost_visa_fee: toMoney(form.cost_visa_fee),
         cost_labour_fee: toMoney(form.cost_labour_fee),
-        cost_insurance_fee: toMoney(form.cost_insurance_fee),
+        cost_insurance_fee: selectedInsuranceTotal,
         income_labour_fee: toMoney(form.income_labour_fee),
         income_agency_fee: toMoney(form.income_agency_fee),
       });
@@ -399,6 +418,11 @@ const FinanceManagement: React.FC = () => {
                   onChange={(e) => setForm((prev) => ({ ...prev, cost_insurance_fee: cleanMoneyInput(e.target.value) }))}
                   className="w-full px-3 py-2 border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue"
                 />
+                {!!selectedWorker && (
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    已按單價 × 僱傭月份計算：{formatMoney(toMoney(form.cost_insurance_fee))} × {selectedWorkerMonths || 0} 月
+                  </p>
+                )}
               </div>
             </div>
 
