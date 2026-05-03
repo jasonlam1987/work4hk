@@ -74,14 +74,17 @@ const FinanceManagement: React.FC = () => {
   const labourFeeUnitByCompanyId = useMemo(() => {
     const map = new Map<string, number>();
     for (const c of labourCompanies) {
-      map.set(String(c.id || ''), Number(c.labour_fee_per_person_month ?? c.price_per_person_month || 0));
+      map.set(String(c.id || ''), Number((c.labour_fee_per_person_month ?? c.price_per_person_month) || 0));
     }
     return map;
   }, [labourCompanies]);
   const labourFeeUnitByCompanyName = useMemo(() => {
     const map = new Map<string, number>();
     for (const c of labourCompanies) {
-      map.set(String(c.company_name || '').trim().toLowerCase(), Number(c.labour_fee_per_person_month ?? c.price_per_person_month || 0));
+      map.set(
+        String(c.company_name || '').trim().toLowerCase(),
+        Number((c.labour_fee_per_person_month ?? c.price_per_person_month) || 0)
+      );
     }
     return map;
   }, [labourCompanies]);
