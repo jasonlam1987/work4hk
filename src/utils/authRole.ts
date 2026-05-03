@@ -29,10 +29,10 @@ export const normalizeRoleKey = (roleRaw: string) => {
 };
 
 const roleRouteAccess: Record<string, string[]> = {
-  super_admin: ['/dashboard', '/users', '/employers', '/quota-applications', '/work-visa-applications', '/approvals', '/workers', '/jobs', '/deletion-approvals', '/settings'],
-  admin: ['/dashboard', '/users', '/employers', '/quota-applications', '/work-visa-applications', '/approvals', '/workers', '/jobs', '/settings'],
-  partner: ['/dashboard', '/quota-applications', '/work-visa-applications', '/approvals', '/workers', '/jobs'],
-  employer: ['/dashboard', '/workers', '/jobs'],
+  super_admin: ['/dashboard', '/users', '/employers', '/quota-applications', '/work-visa-applications', '/approvals', '/workers', '/jobs', '/finance-management', '/deletion-approvals', '/settings'],
+  admin: ['/dashboard', '/users', '/employers', '/quota-applications', '/work-visa-applications', '/approvals', '/workers', '/jobs', '/finance-management', '/settings'],
+  partner: ['/dashboard', '/quota-applications', '/work-visa-applications', '/approvals', '/workers', '/jobs', '/finance-management'],
+  employer: ['/dashboard', '/workers', '/jobs', '/finance-management'],
   employee: ['/dashboard'],
 };
 

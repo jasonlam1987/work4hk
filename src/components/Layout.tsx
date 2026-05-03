@@ -14,17 +14,20 @@ import {
   Menu,
   X,
   Bell,
-  ChevronDown
+  ChevronDown,
+  Wallet
 } from 'lucide-react';
 import clsx from 'clsx';
 import { canAccessPath, getAuthIdentity, getRoleLabel } from '../utils/authRole';
 import { getInAppMessages, getUnreadInAppCount, markAllInAppRead, markInAppMessageRead, subscribeInAppMessages } from '../utils/inAppMessages';
 import { userDisplayPipe } from '../utils/userDisplayPipe';
 import { listDeleteRequests } from '../api/fileDeletion';
+import { getWorkers } from '../api/workers';
 import { listQuotaDeleteRequests } from '../utils/quotaDeleteRequests';
 import { listEntityDeleteRequests } from '../utils/entityDeleteRequests';
 import { subscribeDeleteNotice } from '../utils/deleteNotifications';
 import { getDisplayVersion } from '../utils/version';
+import { countFinancePendingByWorkers, readFinanceRecords } from '../utils/financeRecords';
 
 type PendingPreviewItem = {
   id: string;
@@ -59,6 +62,7 @@ const Layout: React.FC = () => {
   const [noticeOpen, setNoticeOpen] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
+  const [pendingFinanceCount, setPendingFinanceCount] = useState(0);
   const [pendingPreviewItems, setPendingPreviewItems] = useState<PendingPreviewItem[]>([]);
   const [pendingReadMap, setPendingReadMap] = useState<Record<string, number>>(() => readPendingNoticeReads());
   const [messages, setMessages] = useState<ReturnType<typeof getInAppMessages>>([]);
@@ -72,6 +76,15 @@ const Layout: React.FC = () => {
     if (identity.roleKey !== 'super_admin') {
       setPendingApprovalCount(0);
       setPendingPreviewItems([]);
+    }
+    try {
+      const workers = await getWorkers({ limit: 500 }).catch(() => []);
+      const financeRecords = readFinanceRecords();
+      setPendingFinanceCount(countFinancePendingByWorkers(workers || [], financeRecords));
+    } catch {
+      setPendingFinanceCount(0);
+    }
+    if (identity.roleKey !== 'super_admin') {
       return;
     }
     try {
@@ -128,6 +141,9 @@ const Layout: React.FC = () => {
       unsubDelete();
     };
   }, [identity.userId, identity.roleKey]);
+  useEffect(() => {
+    void refreshIndicators();
+  }, [location.pathname]);
   const pendingUnreadCount = pendingPreviewItems.filter((x) => !pendingReadMap[x.id]).length;
   const displayNoticeCount = unreadCount > 0 ? unreadCount : pendingUnreadCount;
 
@@ -172,6 +188,7 @@ const Layout: React.FC = () => {
     { to: '/employers', icon: Building2, label: '僱主管理' },
     { to: '/approvals', icon: FileText, label: '批文管理' },
     { to: '/workers', icon: Users, label: '勞工管理' },
+    { to: '/finance-management', icon: Wallet, label: '財務管理' },
     { to: '/jobs', icon: Briefcase, label: '職位管理' },
   ];
   const navItemsBottom = [
@@ -234,6 +251,11 @@ const Layout: React.FC = () => {
                   {pendingApprovalCount > 99 ? '99+' : pendingApprovalCount}
                 </span>
               )}
+              {item.to === '/finance-management' && pendingFinanceCount > 0 && (
+                <span className="absolute right-2 top-1 min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[10px] leading-4 text-center">
+                  {pendingFinanceCount > 99 ? '99+' : pendingFinanceCount}
+                </span>
+              )}
             </NavLink>
           ))}
           {applyDocChildren.length > 0 && (
@@ -291,6 +313,11 @@ const Layout: React.FC = () => {
               {item.to === '/deletion-approvals' && pendingApprovalCount > 0 && (
                 <span className="absolute right-2 top-1 min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[10px] leading-4 text-center">
                   {pendingApprovalCount > 99 ? '99+' : pendingApprovalCount}
+                </span>
+              )}
+              {item.to === '/finance-management' && pendingFinanceCount > 0 && (
+                <span className="absolute right-2 top-1 min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[10px] leading-4 text-center">
+                  {pendingFinanceCount > 99 ? '99+' : pendingFinanceCount}
                 </span>
               )}
             </NavLink>

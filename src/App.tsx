@@ -13,6 +13,7 @@ import QuotaApplications from './pages/QuotaApplications';
 import Settings from './pages/Settings';
 import DeletionApprovals from './pages/DeletionApprovals';
 import Placeholder from './pages/Placeholder';
+import FinanceManagement from './pages/FinanceManagement';
 import { useAuthStore } from './store/authStore';
 import { canAccessPath } from './utils/authRole';
 
@@ -46,6 +47,7 @@ function App() {
           <Route path="workers" element={<Workers />} />
           <Route path="jobs" element={<Jobs />} />
           <Route path="approvals" element={<Approvals />} />
+          <Route path="finance-management" element={<FinanceManagement />} />
           <Route path="deletion-approvals" element={<DeletionApprovals />} />
           <Route path="settings" element={<Settings />} />
         </Route>
