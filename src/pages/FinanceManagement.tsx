@@ -13,6 +13,7 @@ type FormState = {
   cost_visa_fee: string;
   cost_labour_fee: string;
   cost_insurance_fee: string;
+  cost_third_party_service_fee: string;
   income_labour_fee: string;
   income_agency_fee: string;
 };
@@ -22,6 +23,7 @@ const initialForm: FormState = {
   cost_visa_fee: '',
   cost_labour_fee: '',
   cost_insurance_fee: '',
+  cost_third_party_service_fee: '',
   income_labour_fee: '',
   income_agency_fee: '',
 };
@@ -128,7 +130,11 @@ const FinanceManagement: React.FC = () => {
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
     const list = records.map((r) => {
-      const totalCost = Number(r.cost_visa_fee || 0) + Number(r.cost_labour_fee || 0) + Number(r.cost_insurance_fee || 0);
+      const totalCost =
+        Number(r.cost_visa_fee || 0) +
+        Number(r.cost_labour_fee || 0) +
+        Number(r.cost_insurance_fee || 0) +
+        Number((r as any).cost_third_party_service_fee || 0);
       const totalIncome = Number(r.income_labour_fee || 0) + Number(r.income_agency_fee || 0);
       return {
         ...r,
@@ -174,7 +180,8 @@ const FinanceManagement: React.FC = () => {
     const totalCost =
       toMoney(form.cost_visa_fee) +
       toMoney(form.cost_labour_fee) +
-      toMoney(form.cost_insurance_fee);
+      toMoney(form.cost_insurance_fee) +
+      toMoney(form.cost_third_party_service_fee);
     const totalIncome =
       toMoney(form.income_labour_fee) +
       toMoney(form.income_agency_fee);
@@ -212,6 +219,7 @@ const FinanceManagement: React.FC = () => {
       cost_visa_fee: toInputMoney(record.cost_visa_fee),
       cost_labour_fee: toInputMoney(record.cost_labour_fee),
       cost_insurance_fee: toInputMoney(record.cost_insurance_fee),
+      cost_third_party_service_fee: toInputMoney((record as any).cost_third_party_service_fee),
       income_labour_fee: toInputMoney(record.income_labour_fee),
       income_agency_fee: toInputMoney(record.income_agency_fee),
     });
@@ -266,6 +274,7 @@ const FinanceManagement: React.FC = () => {
         cost_visa_fee: toMoney(form.cost_visa_fee),
         cost_labour_fee: toMoney(form.cost_labour_fee),
         cost_insurance_fee: toMoney(form.cost_insurance_fee),
+        cost_third_party_service_fee: toMoney(form.cost_third_party_service_fee),
         income_labour_fee: toMoney(form.income_labour_fee),
         income_agency_fee: toMoney(form.income_agency_fee),
       });
@@ -448,6 +457,15 @@ const FinanceManagement: React.FC = () => {
                     已按單價 × 僱傭月份計算：{formatMoney(selectedUnitPrices.insuranceUnit)} × {selectedWorkerMonths || 0} 月
                   </p>
                 )}
+              </div>
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">第三方服務費（元）</label>
+                <input
+                  type="text"
+                  value={form.cost_third_party_service_fee}
+                  onChange={(e) => setForm((prev) => ({ ...prev, cost_third_party_service_fee: cleanMoneyInput(e.target.value) }))}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue"
+                />
               </div>
             </div>
 

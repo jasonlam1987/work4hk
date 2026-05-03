@@ -12,6 +12,7 @@ export type FinanceRecord = {
   cost_visa_fee: number;
   cost_labour_fee: number;
   cost_insurance_fee: number;
+  cost_third_party_service_fee: number;
   income_labour_fee: number;
   income_agency_fee: number;
   actual_profit: number;
@@ -30,9 +31,10 @@ const normalizeRecord = (row: FinanceRecord): FinanceRecord => {
   const costVisa = toNumber(row.cost_visa_fee);
   const costLabour = toNumber(row.cost_labour_fee);
   const costInsurance = toNumber(row.cost_insurance_fee);
+  const costThirdParty = toNumber(row.cost_third_party_service_fee);
   const incomeLabour = toNumber(row.income_labour_fee);
   const incomeAgency = toNumber(row.income_agency_fee);
-  const totalCost = costVisa + costLabour + costInsurance;
+  const totalCost = costVisa + costLabour + costInsurance + costThirdParty;
   const totalIncome = incomeLabour + incomeAgency;
   return {
     ...row,
@@ -44,6 +46,7 @@ const normalizeRecord = (row: FinanceRecord): FinanceRecord => {
     cost_visa_fee: costVisa,
     cost_labour_fee: costLabour,
     cost_insurance_fee: costInsurance,
+    cost_third_party_service_fee: costThirdParty,
     income_labour_fee: incomeLabour,
     income_agency_fee: incomeAgency,
     actual_profit: totalIncome - totalCost,
