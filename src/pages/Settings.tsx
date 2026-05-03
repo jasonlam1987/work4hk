@@ -19,11 +19,19 @@ import {
   readAuthorizedParties,
   updateAuthorizedParty,
 } from '../utils/authorizedParties';
+import {
+  LabourCompany,
+  createLabourCompany,
+  deleteLabourCompany,
+  filterLabourCompanies,
+  readLabourCompanies,
+  updateLabourCompany,
+} from '../utils/labourCompanies';
 import Users, { UsersHandle } from './Users';
 import { getAuthIdentity } from '../utils/authRole';
 import { GlobalAuditLog, readGlobalAuditLogs } from '../utils/auditLog';
 
-type Tab = 'partners' | 'authorized_parties' | 'users' | 'api_keys' | 'audit_logs';
+type Tab = 'partners' | 'labour_companies' | 'authorized_parties' | 'users' | 'api_keys' | 'audit_logs';
 
 type HttpErrorLike = {
   response?: {
@@ -58,6 +66,13 @@ type BulkManifestItem = {
   download_url: string;
 };
 
+type LabourCompanyFormState = {
+  company_name: string;
+  company_code: string;
+  contact_person: string;
+  price_per_person_month: number | null;
+};
+
 const Settings: React.FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>('partners');
   const [loading, setLoading] = useState(false);
@@ -71,18 +86,21 @@ const Settings: React.FC = () => {
   const usersRef = useRef<UsersHandle>(null);
 
   const [partners, setPartners] = useState<Partner[]>([]);
+  const [labourCompanies, setLabourCompanies] = useState<LabourCompany[]>([]);
   const [authorizedParties, setAuthorizedParties] = useState<AuthorizedParty[]>([]);
 
   // Modal states
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedLabourCompanyId, setSelectedLabourCompanyId] = useState<string | null>(null);
   const [selectedAuthorizedPartyId, setSelectedAuthorizedPartyId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   // Form states
-  const [partnerForm, setPartnerForm] = useState<PartnerCreate>({
-    name: '',
+  const [partnerForm, setPartnerForm] = useState<PartnerCreate>({ name: '' });
+  const [labourCompanyForm, setLabourCompanyForm] = useState<LabourCompanyFormState>({
+    company_name: '',
     company_code: '',
     contact_person: '',
     price_per_person_month: null,
@@ -308,6 +326,20 @@ const Settings: React.FC = () => {
       }
       return;
     }
+    if (activeTab === 'labour_companies') {
+      setLoading(true);
+      setError('');
+      try {
+        const list = readLabourCompanies();
+        setLabourCompanies(filterLabourCompanies(list, search));
+      } catch {
+        setLabourCompanies([]);
+        setError('讀取勞務公司資料失敗');
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
 
     if (activeTab === 'users') return;
 
@@ -339,10 +371,12 @@ const Settings: React.FC = () => {
   const handleOpenCreate = () => {
     setIsEditing(false);
     setSelectedId(null);
+    setSelectedLabourCompanyId(null);
     setSelectedAuthorizedPartyId(null);
-    if (activeTab === 'partners') {
-      setPartnerForm({
-        name: '',
+    if (activeTab === 'partners') setPartnerForm({ name: '' });
+    if (activeTab === 'labour_companies') {
+      setLabourCompanyForm({
+        company_name: '',
         company_code: '',
         contact_person: '',
         price_per_person_month: null,
@@ -365,12 +399,10 @@ const Settings: React.FC = () => {
   const handleOpenEdit = (item: Partner) => {
     setIsEditing(true);
     setSelectedId(item.id);
+    setSelectedLabourCompanyId(null);
     setSelectedAuthorizedPartyId(null);
     setPartnerForm({
       name: item.name,
-      company_code: item.company_code || '',
-      contact_person: item.contact_person || item.phone || '',
-      price_per_person_month: item.price_per_person_month ?? null,
       phone: item.phone || '',
       email: item.email || '',
       remarks: item.remarks || '',
@@ -378,9 +410,24 @@ const Settings: React.FC = () => {
     setIsModalOpen(true);
   };
 
+  const handleOpenEditLabourCompany = (item: LabourCompany) => {
+    setIsEditing(true);
+    setSelectedId(null);
+    setSelectedLabourCompanyId(item.id);
+    setSelectedAuthorizedPartyId(null);
+    setLabourCompanyForm({
+      company_name: item.company_name || '',
+      company_code: item.company_code || '',
+      contact_person: item.contact_person || '',
+      price_per_person_month: item.price_per_person_month ?? null,
+    });
+    setIsModalOpen(true);
+  };
+
   const handleOpenEditAuthorizedParty = (item: AuthorizedParty) => {
     setIsEditing(true);
     setSelectedId(null);
+    setSelectedLabourCompanyId(null);
     setSelectedAuthorizedPartyId(item.id);
     setAuthorizedPartyForm({
       company_name: item.company_name || '',
@@ -405,6 +452,28 @@ const Settings: React.FC = () => {
         fetchData();
         return;
       }
+      if (activeTab === 'labour_companies') {
+        const price = Number(labourCompanyForm.price_per_person_month);
+        if (!Number.isFinite(price) || price < 0) {
+          alert('合作價格格式不正確，請輸入有效數字');
+          return;
+        }
+        const payload = {
+          company_name: String(labourCompanyForm.company_name || '').trim(),
+          company_code: String(labourCompanyForm.company_code || '').trim(),
+          contact_person: String(labourCompanyForm.contact_person || '').trim(),
+          price_per_person_month: price,
+        };
+        if (!payload.company_name || !payload.company_code || !payload.contact_person) {
+          alert('請完整填寫勞務公司資料');
+          return;
+        }
+        if (isEditing && selectedLabourCompanyId) updateLabourCompany(selectedLabourCompanyId, payload);
+        else createLabourCompany(payload);
+        setIsModalOpen(false);
+        fetchData();
+        return;
+      }
       if (isEditing && selectedId) await updatePartner(selectedId, partnerForm);
       else await createPartner(partnerForm);
       setIsModalOpen(false);
@@ -422,6 +491,13 @@ const Settings: React.FC = () => {
     const ok = window.confirm('確定要刪除此授權方資料嗎？');
     if (!ok) return;
     deleteAuthorizedParty(id);
+    fetchData();
+  };
+
+  const handleDeleteLabourCompany = (id: string) => {
+    const ok = window.confirm('確定要刪除此勞務公司資料嗎？');
+    if (!ok) return;
+    deleteLabourCompany(id);
     fetchData();
   };
 
@@ -832,6 +908,48 @@ const Settings: React.FC = () => {
       );
     }
 
+    if (activeTab === 'labour_companies') {
+      return (
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50/50">
+            <tr>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">勞務公司名字</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">勞務公司編號</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">聯繫人</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">合作價格</th>
+              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
+            </tr>
+          </thead>
+          <tbody className="bg-white/30 divide-y divide-gray-200">
+            {labourCompanies.length === 0 ? (
+              <tr><td colSpan={5} className="px-6 py-8 text-center text-gray-500">找不到資料</td></tr>
+            ) : (
+              labourCompanies.map((item) => (
+                <tr key={item.id} className="hover:bg-gray-50/50">
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{item.company_name || '-'}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.company_code || '-'}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.contact_person || '-'}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{formatPriceDisplay(item.price_per_person_month)}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                    <button onClick={() => handleOpenEditLabourCompany(item)} className="text-apple-blue hover:text-blue-900 bg-blue-50 hover:bg-blue-100 p-2 rounded-full transition-colors">
+                      <Edit2 className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteLabourCompany(item.id)}
+                      className="text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 p-2 rounded-full transition-colors ml-2"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      );
+    }
+
     if (loading && activeTab === 'partners' && !partners.length) {
       return (
         <div className="py-12 text-center">
@@ -844,10 +962,10 @@ const Settings: React.FC = () => {
       <table className="min-w-full divide-y divide-gray-200">
         <thead className="bg-gray-50/50">
           <tr>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">勞務公司名字</th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">勞務公司編號</th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">聯繫人</th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">合作價格</th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">名稱</th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">聯絡電話</th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">備註</th>
             <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
           </tr>
         </thead>
@@ -858,9 +976,9 @@ const Settings: React.FC = () => {
             partners.map((item) => (
               <tr key={item.id} className="hover:bg-gray-50/50">
                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{item.name}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.company_code || '-'}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.contact_person || item.phone || '-'}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{formatPriceDisplay(item.price_per_person_month)}</td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.phone || '-'}</td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.email || '-'}</td>
+                <td className="px-6 py-4 text-sm text-gray-500 truncate max-w-xs">{item.remarks || '-'}</td>
                 <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                   <button onClick={() => handleOpenEdit(item)} className="text-apple-blue hover:text-blue-900 bg-blue-50 hover:bg-blue-100 p-2 rounded-full transition-colors">
                     <Edit2 className="w-4 h-4" />
@@ -876,7 +994,8 @@ const Settings: React.FC = () => {
 
   const getTabLabel = (tab: Tab) => {
     switch(tab) {
-      case 'partners': return '勞務公司管理';
+      case 'partners': return '合作方';
+      case 'labour_companies': return '勞務公司管理';
       case 'authorized_parties': return '授權方管理';
       case 'users': return '用戶管理';
       case 'api_keys': return 'API 金鑰管理';
@@ -889,9 +1008,9 @@ const Settings: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold text-apple-dark">系統設定</h1>
-          <p className="text-gray-500 mt-1">管理勞務公司、授權方、用戶與系統 API</p>
+          <p className="text-gray-500 mt-1">管理合作方、勞務公司、授權方、用戶與系統 API</p>
         </div>
-        {(activeTab === 'partners' || activeTab === 'authorized_parties' || activeTab === 'users') && (
+        {(activeTab === 'partners' || activeTab === 'labour_companies' || activeTab === 'authorized_parties' || activeTab === 'users') && (
           <button 
             onClick={() => {
               if (activeTab === 'users') {
@@ -912,8 +1031,8 @@ const Settings: React.FC = () => {
         <div className="border-b border-gray-200/50 bg-white/60 px-4 py-3">
           <div className="flex flex-wrap gap-2">
             {((getAuthIdentity().roleKey === 'super_admin'
-              ? ['partners', 'authorized_parties', 'users', 'api_keys', 'audit_logs']
-              : ['partners', 'authorized_parties', 'users', 'api_keys']) as Tab[]).map((tab) => (
+              ? ['partners', 'labour_companies', 'authorized_parties', 'users', 'api_keys', 'audit_logs']
+              : ['partners', 'labour_companies', 'authorized_parties', 'users', 'api_keys']) as Tab[]).map((tab) => (
               <button
                 key={tab}
                 onClick={() => { setActiveTab(tab); setSearch(''); }}
@@ -925,6 +1044,7 @@ const Settings: React.FC = () => {
                 )}
               >
                 {tab === 'partners' && <Handshake className="w-4 h-4" />}
+                {tab === 'labour_companies' && <Handshake className="w-4 h-4" />}
                 {tab === 'authorized_parties' && <Handshake className="w-4 h-4" />}
                 {tab === 'users' && <Users2 className="w-4 h-4" />}
                 {tab === 'api_keys' && <Key className="w-4 h-4" />}
@@ -935,7 +1055,7 @@ const Settings: React.FC = () => {
           </div>
         </div>
 
-        {(activeTab === 'partners' || activeTab === 'authorized_parties' || activeTab === 'audit_logs') && (
+        {(activeTab === 'partners' || activeTab === 'labour_companies' || activeTab === 'authorized_parties' || activeTab === 'audit_logs') && (
           <div className="p-4 border-b border-gray-200/50 bg-white/30 flex items-center justify-between">
             <div className="flex items-center gap-2 w-full">
               <div className="relative w-full max-w-sm">
@@ -1069,14 +1189,14 @@ const Settings: React.FC = () => {
                 />
               </div>
             </div>
-          ) : (
+          ) : activeTab === 'labour_companies' ? (
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">勞務公司名字 *</label>
                 <input
                   type="text"
-                  value={partnerForm.name}
-                  onChange={(e) => setPartnerForm({ ...partnerForm, name: e.target.value })}
+                  value={labourCompanyForm.company_name}
+                  onChange={(e) => setLabourCompanyForm({ ...labourCompanyForm, company_name: e.target.value })}
                   className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
                   required
                 />
@@ -1085,8 +1205,8 @@ const Settings: React.FC = () => {
                 <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">勞務公司編號 *</label>
                 <input
                   type="text"
-                  value={partnerForm.company_code || ''}
-                  onChange={(e) => setPartnerForm({ ...partnerForm, company_code: e.target.value })}
+                  value={labourCompanyForm.company_code}
+                  onChange={(e) => setLabourCompanyForm({ ...labourCompanyForm, company_code: e.target.value })}
                   className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
                   required
                 />
@@ -1095,8 +1215,8 @@ const Settings: React.FC = () => {
                 <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">聯繫人 *</label>
                 <input
                   type="text"
-                  value={partnerForm.contact_person || ''}
-                  onChange={(e) => setPartnerForm({ ...partnerForm, contact_person: e.target.value })}
+                  value={labourCompanyForm.contact_person}
+                  onChange={(e) => setLabourCompanyForm({ ...labourCompanyForm, contact_person: e.target.value })}
                   className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
                   required
                 />
@@ -1107,13 +1227,13 @@ const Settings: React.FC = () => {
                   type="text"
                   inputMode="decimal"
                   value={
-                    partnerForm.price_per_person_month == null
+                    labourCompanyForm.price_per_person_month == null
                       ? ''
-                      : String(partnerForm.price_per_person_month)
+                      : String(labourCompanyForm.price_per_person_month)
                   }
                   onChange={(e) =>
-                    setPartnerForm({
-                      ...partnerForm,
+                    setLabourCompanyForm({
+                      ...labourCompanyForm,
                       price_per_person_month: normalizePriceInput(e.target.value),
                     })
                   }
@@ -1122,8 +1242,48 @@ const Settings: React.FC = () => {
                   required
                 />
                 <p className="text-xs text-gray-500 mt-1">
-                  顯示：{formatPriceDisplay(partnerForm.price_per_person_month)}
+                  顯示：{formatPriceDisplay(labourCompanyForm.price_per_person_month)}
                 </p>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">名稱 *</label>
+                <input
+                  type="text"
+                  value={partnerForm.name}
+                  onChange={(e) => setPartnerForm({ ...partnerForm, name: e.target.value })}
+                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">聯絡電話</label>
+                <input
+                  type="text"
+                  value={partnerForm.phone || ''}
+                  onChange={(e) => setPartnerForm({ ...partnerForm, phone: e.target.value })}
+                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">Email</label>
+                <input
+                  type="email"
+                  value={partnerForm.email || ''}
+                  onChange={(e) => setPartnerForm({ ...partnerForm, email: e.target.value })}
+                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">備註</label>
+                <textarea
+                  value={partnerForm.remarks || ''}
+                  onChange={(e) => setPartnerForm({ ...partnerForm, remarks: e.target.value })}
+                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                  rows={3}
+                />
               </div>
             </div>
           )}

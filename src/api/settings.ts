@@ -43,9 +43,6 @@ export interface RecruiterCreate {
 export interface Partner {
   id: number;
   name: string;
-  company_code?: string | null;
-  contact_person?: string | null;
-  price_per_person_month?: number | null;
   phone?: string | null;
   email?: string | null;
   remarks?: string | null;
@@ -55,9 +52,6 @@ export interface Partner {
 
 export interface PartnerCreate {
   name: string;
-  company_code?: string | null;
-  contact_person?: string | null;
-  price_per_person_month?: number | null;
   phone?: string | null;
   email?: string | null;
   remarks?: string | null;
