@@ -11,6 +11,8 @@ export type WorkerEducation = {
 }
 
 export type WorkerProfile = {
+  labour_company_id?: string
+  labour_company_name?: string
   approval_id?: number
   approval_number?: string
   quota_seq?: string

@@ -102,6 +102,8 @@ export const buildWorkerSubmitPayload = (input: BuildPayloadInput) => {
 
   const persistedProfile: WorkerProfile = {
     ...profile,
+    labour_company_id: String((profile as any).labour_company_id || '').trim() || undefined,
+    labour_company_name: String((profile as any).labour_company_name || '').trim() || undefined,
     quota_seq: selectedQuotaSeq || undefined,
     work_locations: Array.isArray(profile.work_locations) ? profile.work_locations.slice(0, 3) : [],
     contact_phone: mergePhone(phoneCode, phoneNumber) || undefined,
@@ -146,6 +148,8 @@ export const buildWorkerSubmitPayload = (input: BuildPayloadInput) => {
     labour_status: labourStatusToApi(uiStatus),
     employer_id: employerId,
     approval_id: approvalId,
+    labour_company_id: persistedProfile.labour_company_id,
+    labour_company_name: persistedProfile.labour_company_name,
     approval_number: String(profile.approval_number || '').trim() || undefined,
     quota_seq: selectedQuotaSeq || undefined,
     pinyin_name: String(profile.pinyin_name || '').trim() || undefined,

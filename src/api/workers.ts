@@ -9,6 +9,8 @@ export interface Worker {
   approval_id?: number;
   approval_number?: string;
   quota_seq?: string;
+  labour_company_id?: string;
+  labour_company_name?: string;
   position_id?: number;
   position_name?: string;
   labour_status?: '辦證中' | '在職' | '離職' | string;

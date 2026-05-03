@@ -22,6 +22,8 @@ import { buildWorkerSubmitPayload, validateWorkerSubmitInput } from '../features
 import { submitEntityDeleteRequest } from '../utils/entityDeleteRequests';
 import { resolveApprovalEmployerId } from '../utils/approvalEmployer';
 import { toWorkerNamePinyin } from '../utils/namePinyin';
+import { LabourCompany, readLabourCompanies } from '../utils/labourCompanies';
+import { refreshLabourCompanyDispatchStats } from '../utils/labourCompanyStats';
 
 const MAX_FILES_PER_CATEGORY = 10;
 const MAX_FILE_SIZE = MAX_UPLOAD_SIZE;
@@ -81,6 +83,7 @@ const Workers: React.FC = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [formData, setFormData] = useState<WorkerCreate>(initialForm);
+  const [labourCompanies, setLabourCompanies] = useState<LabourCompany[]>([]);
   const [pinyinTouched, setPinyinTouched] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -153,6 +156,26 @@ const Workers: React.FC = () => {
     } catch {
     }
   }, [storedFiles]);
+
+  useEffect(() => {
+    const loadCompanies = () => setLabourCompanies(readLabourCompanies());
+    loadCompanies();
+    const onStorage = (evt: StorageEvent) => {
+      if (evt.key && evt.key !== 'labour_companies_v1') return;
+      loadCompanies();
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
+  useEffect(() => {
+    if (!isModalOpen) return;
+    setLabourCompanies(readLabourCompanies());
+  }, [isModalOpen]);
+
+  useEffect(() => {
+    refreshLabourCompanyDispatchStats(workers || []);
+  }, [workers]);
 
   useEffect(() => {
     if (!isFileModalOpen || !selectedWorkerForFiles || superAdmin) return;
@@ -508,6 +531,8 @@ const Workers: React.FC = () => {
     setEmployerDropdownOpen(false);
     setApprovalDropdownOpen(false);
     setProfile({
+      labour_company_id: undefined,
+      labour_company_name: undefined,
       work_experiences: [emptyExperience()],
       educations: [emptyEducation()],
       entry_refused: false,
@@ -547,6 +572,8 @@ const Workers: React.FC = () => {
             : '+852';
     const inferredNumber = rawContact.replace(/^\+\d{2,3}/, '').trim();
     const merged: WorkerProfile = {
+      labour_company_id: (worker as any).labour_company_id ?? p.labour_company_id,
+      labour_company_name: (worker as any).labour_company_name ?? p.labour_company_name,
       approval_id: (worker as any).approval_id ?? p.approval_id,
       approval_number: (worker as any).approval_number ?? p.approval_number,
       quota_seq: (worker as any).quota_seq ?? p.quota_seq,
@@ -1261,6 +1288,29 @@ const Workers: React.FC = () => {
                       已套入：{selectedQuotaDetail.job_title || '-'} · 工資 {selectedQuotaDetail.monthly_salary ?? '-'} · {selectedQuotaDetail.employment_months ?? '-'} 個月
                     </p>
                   )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">所屬勞務公司</label>
+                  <select
+                    value={String(profile.labour_company_id || '')}
+                    onChange={(e) => {
+                      const selected = labourCompanies.find((x) => x.id === e.target.value);
+                      setProfile((prev) => ({
+                        ...prev,
+                        labour_company_id: selected?.id || undefined,
+                        labour_company_name: selected?.company_name || undefined,
+                      }));
+                    }}
+                    className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                  >
+                    <option value="">請選擇所屬勞務公司</option>
+                    {labourCompanies.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.company_name}（{item.company_code}）
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-500 mt-1 ml-1">資料來源：系統設定 → 勞務公司管理</p>
                 </div>
               </div>
             </div>
