@@ -1,7 +1,7 @@
 import apiClient from './client';
 import { getAuthIdentity } from '../utils/authRole';
 
-export type FileModule = 'employers' | 'approvals' | 'workers';
+export type FileModule = 'employers' | 'approvals' | 'workers' | 'finance';
 
 export type UploadProgress = {
   percent: number;

@@ -88,6 +88,14 @@ export const upsertFinanceRecord = (input: FinanceRecordInput): FinanceRecord =>
   return row;
 };
 
+export const deleteFinanceRecord = (workerId: number) => {
+  const id = Number(workerId || 0);
+  if (!id) return readFinanceRecords();
+  const next = readFinanceRecords().filter((x) => Number(x.worker_id || 0) !== id);
+  writeFinanceRecords(next);
+  return next;
+};
+
 export const countFinancePendingByWorkers = (workers: Worker[], records: FinanceRecord[]) => {
   const doneIds = new Set(records.map((x) => Number(x.worker_id || 0)).filter((x) => x > 0));
   return (workers || []).filter((w) => {

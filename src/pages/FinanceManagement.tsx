@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { DollarSign, Loader2, Plus, RefreshCw } from 'lucide-react';
+import { DollarSign, Loader2, Plus, RefreshCw, FolderOpen, Edit2, Trash2, UploadCloud, Download, FileText } from 'lucide-react';
 import clsx from 'clsx';
 import Modal from '../components/Modal';
 import { Worker, getWorkers } from '../api/workers';
 import { getWorkerProfile } from '../utils/workerProfile';
 import { labourStatusToUi, parseEmploymentMonths } from '../utils/workersForm';
 import { LabourCompany, readLabourCompanies } from '../utils/labourCompanies';
-import { FinanceRecord, countFinancePendingByWorkers, readFinanceRecords, upsertFinanceRecord } from '../utils/financeRecords';
+import { FinanceRecord, countFinancePendingByWorkers, deleteFinanceRecord, readFinanceRecords, upsertFinanceRecord } from '../utils/financeRecords';
+import { deleteManagedFile, downloadManagedFile, listManagedFiles, uploadManagedFile } from '../api/files';
 
 type FormState = {
   worker_id: number;
@@ -80,6 +81,19 @@ const getWorkerOnDutyDate = (worker?: Worker) => {
   return '';
 };
 
+type StoredFinanceFile = {
+  uid: string;
+  workerId: number;
+  folder: string;
+  name: string;
+  size: number;
+  mimeType?: string;
+  downloadUrl?: string;
+  uploadTime: string;
+};
+
+const FINANCE_FOLDERS = ['收入憑證', '支出憑證'];
+
 const FinanceManagement: React.FC = () => {
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [records, setRecords] = useState<FinanceRecord[]>([]);
@@ -90,6 +104,11 @@ const FinanceManagement: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<FormState>(initialForm);
+  const [isFileModalOpen, setIsFileModalOpen] = useState(false);
+  const [selectedFinanceRowForFiles, setSelectedFinanceRowForFiles] = useState<FinanceRecord | null>(null);
+  const [activeFolder, setActiveFolder] = useState<string>(FINANCE_FOLDERS[0]);
+  const [storedFiles, setStoredFiles] = useState<StoredFinanceFile[]>([]);
+  const [fileLoading, setFileLoading] = useState(false);
 
   const labourCompanies = useMemo<LabourCompany[]>(() => readLabourCompanies(), []);
   const labourFeeUnitByCompanyId = useMemo(() => {
@@ -227,6 +246,29 @@ const FinanceManagement: React.FC = () => {
     void loadData();
   }, []);
 
+  useEffect(() => {
+    if (!isFileModalOpen || !selectedFinanceRowForFiles?.worker_id) return;
+    const ownerId = Number(selectedFinanceRowForFiles.worker_id || 0);
+    if (!ownerId) return;
+    setFileLoading(true);
+    listManagedFiles('finance', ownerId, activeFolder)
+      .then((items) => {
+        const mapped: StoredFinanceFile[] = (items || []).map((it: any) => ({
+          uid: String(it.uid || ''),
+          workerId: ownerId,
+          folder: String(it.folder || activeFolder),
+          name: String(it.original_name || ''),
+          size: Number(it.size || 0),
+          mimeType: String(it.mime_type || ''),
+          downloadUrl: String(it.download_url || ''),
+          uploadTime: it.created_at ? new Date(it.created_at).toLocaleString() : new Date().toLocaleString(),
+        }));
+        setStoredFiles(mapped);
+      })
+      .catch(() => setStoredFiles([]))
+      .finally(() => setFileLoading(false));
+  }, [isFileModalOpen, selectedFinanceRowForFiles, activeFolder]);
+
   const openCreate = () => {
     setForm(initialForm);
     setIsModalOpen(true);
@@ -244,6 +286,62 @@ const FinanceManagement: React.FC = () => {
       income_agency_fee: toInputMoney(record.income_agency_fee),
     });
     setIsModalOpen(true);
+  };
+
+  const openFiles = (record: FinanceRecord) => {
+    setSelectedFinanceRowForFiles(record);
+    setActiveFolder(FINANCE_FOLDERS[0]);
+    setIsFileModalOpen(true);
+  };
+
+  const handleUploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const ownerId = Number(selectedFinanceRowForFiles?.worker_id || 0);
+    if (!file || !ownerId) return;
+    try {
+      await uploadManagedFile({
+        module: 'finance',
+        owner_id: ownerId,
+        folder: activeFolder,
+        file,
+      });
+      const items = await listManagedFiles('finance', ownerId, activeFolder);
+      const mapped: StoredFinanceFile[] = (items || []).map((it: any) => ({
+        uid: String(it.uid || ''),
+        workerId: ownerId,
+        folder: String(it.folder || activeFolder),
+        name: String(it.original_name || ''),
+        size: Number(it.size || 0),
+        mimeType: String(it.mime_type || ''),
+        downloadUrl: String(it.download_url || ''),
+        uploadTime: it.created_at ? new Date(it.created_at).toLocaleString() : new Date().toLocaleString(),
+      }));
+      setStoredFiles(mapped);
+      alert('上傳成功');
+    } catch (err: any) {
+      alert(err?.response?.data?.detail || err?.message || '上傳失敗');
+    } finally {
+      e.currentTarget.value = '';
+    }
+  };
+
+  const handleDeleteFinance = (workerId: number) => {
+    const target = records.find((x) => Number(x.worker_id) === Number(workerId));
+    const ok = window.confirm(`確定要刪除「${target?.worker_name || `勞工#${workerId}`}」的財務資料嗎？`);
+    if (!ok) return;
+    const next = deleteFinanceRecord(workerId);
+    setRecords(next);
+  };
+
+  const handleDeleteFile = async (uid: string) => {
+    if (!uid) return;
+    if (!window.confirm('確定要刪除此憑證檔案嗎？')) return;
+    try {
+      await deleteManagedFile(uid);
+      setStoredFiles((prev) => prev.filter((x) => x.uid !== uid));
+    } catch (err: any) {
+      alert(err?.response?.data?.detail || err?.message || '刪除檔案失敗');
+    }
   };
 
   const handleSelectWorker = (workerIdRaw: string) => {
@@ -401,13 +499,30 @@ const FinanceManagement: React.FC = () => {
                     )}>
                       {formatMoney((row as any).actualProfit || 0)} 元
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm">
+                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm space-x-2">
+                      <button
+                        type="button"
+                        onClick={() => openFiles(row)}
+                        className="text-orange-500 hover:text-orange-700 bg-orange-50 hover:bg-orange-100 p-2 rounded-full transition-colors"
+                        title="儲存空間"
+                      >
+                        <FolderOpen className="w-4 h-4" />
+                      </button>
                       <button
                         type="button"
                         onClick={() => openEdit(row)}
-                        className="px-3 py-1.5 border border-gray-200 rounded hover:bg-gray-50"
+                        className="text-apple-blue hover:text-blue-900 bg-blue-50 hover:bg-blue-100 p-2 rounded-full transition-colors"
+                        title="編輯"
                       >
-                        編輯
+                        <Edit2 className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteFinance(Number(row.worker_id || 0))}
+                        className="text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 p-2 rounded-full transition-colors"
+                        title="刪除"
+                      >
+                        <Trash2 className="w-4 h-4" />
                       </button>
                     </td>
                   </tr>
@@ -556,6 +671,91 @@ const FinanceManagement: React.FC = () => {
             </button>
           </div>
         </form>
+      </Modal>
+
+      <Modal
+        isOpen={isFileModalOpen}
+        onClose={() => setIsFileModalOpen(false)}
+        title={`儲存空間 - ${selectedFinanceRowForFiles?.worker_name || ''}`}
+        className="max-w-4xl"
+      >
+        <div className="flex h-[500px] -mx-6 -mb-6 border-t border-gray-200">
+          <div className="w-48 bg-gray-50 border-r border-gray-200 p-4 space-y-2 shrink-0">
+            {FINANCE_FOLDERS.map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => setActiveFolder(f)}
+                className={clsx(
+                  'w-full text-left px-3 py-2 rounded-apple-sm text-sm font-medium transition-colors flex items-center space-x-2',
+                  activeFolder === f ? 'bg-apple-blue text-white shadow-sm' : 'text-gray-600 hover:bg-gray-200'
+                )}
+              >
+                <FolderOpen className={clsx('w-4 h-4', activeFolder === f ? 'text-white' : 'text-gray-400')} />
+                <span>{f}</span>
+              </button>
+            ))}
+          </div>
+          <div className="flex-1 flex flex-col bg-white">
+            <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-white/50">
+              <h3 className="font-medium text-gray-800 flex items-center">
+                <span className="text-gray-400 mr-2">/</span>
+                {activeFolder}
+              </h3>
+              <label className="flex items-center space-x-2 bg-white border border-apple-blue text-apple-blue hover:bg-blue-50 px-3 py-1.5 rounded-apple-sm transition-colors text-sm font-medium cursor-pointer">
+                <UploadCloud className="w-4 h-4" />
+                <span>上傳憑證</span>
+                <input type="file" className="hidden" onChange={handleUploadFile} />
+              </label>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4">
+              {fileLoading ? (
+                <div className="h-full flex items-center justify-center text-gray-400">
+                  <Loader2 className="w-6 h-6 animate-spin" />
+                </div>
+              ) : storedFiles.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-gray-400 space-y-3">
+                  <FolderOpen className="w-12 h-12 text-gray-300" />
+                  <p>此資料夾目前沒有檔案</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {storedFiles.map((file) => (
+                    <div key={file.uid} className="flex items-center justify-between p-3 bg-white border border-gray-200 rounded-apple-sm hover:shadow-sm transition-shadow group">
+                      <div className="flex items-center space-x-3 overflow-hidden">
+                        <div className="p-2 bg-blue-50 text-apple-blue rounded-apple-sm shrink-0">
+                          <FileText className="w-5 h-5" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-gray-900 truncate">{file.name}</p>
+                          <p className="text-xs text-gray-500 mt-0.5">{(file.size / 1024).toFixed(1)} KB • {file.uploadTime}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          type="button"
+                          onClick={() => file.downloadUrl ? downloadManagedFile(file.downloadUrl, file.name) : undefined}
+                          className="p-1.5 text-gray-500 hover:text-apple-blue hover:bg-blue-50 rounded-md transition-colors"
+                          title="下載"
+                        >
+                          <Download className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteFile(file.uid)}
+                          className="p-1.5 text-gray-500 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors"
+                          title="刪除"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       </Modal>
     </div>
   );
