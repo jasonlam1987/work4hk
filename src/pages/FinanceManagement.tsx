@@ -74,9 +74,8 @@ const getWorkerOnDutyDate = (worker?: Worker) => {
   if (!worker) return '';
   const workerId = Number((worker as any)?.id || 0);
   const profile = getWorkerProfile(workerId);
-  const batches = Array.isArray(profile?.work_batches) ? profile.work_batches : [];
-  const activeBatch = batches.find((b) => labourStatusToUi(String(b?.status || '')) === '在職');
-  if (activeBatch?.start_date) return toDateInputValue(activeBatch.start_date);
+  // 在職日期直接等於勞工管理的赴港日期（arrival_date）
+  if ((worker as any)?.arrival_date) return toDateInputValue((worker as any).arrival_date);
   if (profile?.arrival_date) return toDateInputValue(profile.arrival_date);
   return '';
 };
