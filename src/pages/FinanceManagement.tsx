@@ -10,6 +10,7 @@ import { FinanceRecord, countFinancePendingByWorkers, readFinanceRecords, upsert
 
 type FormState = {
   worker_id: number;
+  on_duty_date: string;
   cost_visa_fee: string;
   cost_labour_fee: string;
   cost_insurance_fee: string;
@@ -20,6 +21,7 @@ type FormState = {
 
 const initialForm: FormState = {
   worker_id: 0,
+  on_duty_date: '',
   cost_visa_fee: '',
   cost_labour_fee: '',
   cost_insurance_fee: '',
@@ -59,6 +61,24 @@ const getWorkerEmploymentMonths = (worker?: Worker) => {
   const batchMonths = Number(latest?.employment_term_months || 0);
   if (Number.isFinite(batchMonths) && batchMonths > 0) return batchMonths;
   return 0;
+};
+
+const toDateInputValue = (value: unknown) => {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const datePart = text.includes('T') ? text.slice(0, 10) : text;
+  return /^\d{4}-\d{2}-\d{2}$/.test(datePart) ? datePart : '';
+};
+
+const getWorkerOnDutyDate = (worker?: Worker) => {
+  if (!worker) return '';
+  const workerId = Number((worker as any)?.id || 0);
+  const profile = getWorkerProfile(workerId);
+  const batches = Array.isArray(profile?.work_batches) ? profile.work_batches : [];
+  const activeBatch = batches.find((b) => labourStatusToUi(String(b?.status || '')) === '在職');
+  if (activeBatch?.start_date) return toDateInputValue(activeBatch.start_date);
+  if (profile?.arrival_date) return toDateInputValue(profile.arrival_date);
+  return '';
 };
 
 const FinanceManagement: React.FC = () => {
@@ -216,6 +236,7 @@ const FinanceManagement: React.FC = () => {
   const openEdit = (record: FinanceRecord) => {
     setForm({
       worker_id: Number(record.worker_id || 0),
+      on_duty_date: toDateInputValue((record as any).on_duty_date),
       cost_visa_fee: toInputMoney(record.cost_visa_fee),
       cost_labour_fee: toInputMoney(record.cost_labour_fee),
       cost_insurance_fee: toInputMoney(record.cost_insurance_fee),
@@ -244,6 +265,7 @@ const FinanceManagement: React.FC = () => {
     setForm((prev) => ({
       ...prev,
       worker_id: workerId,
+      on_duty_date: getWorkerOnDutyDate(worker),
       cost_labour_fee: totalLabourFee > 0 ? String(totalLabourFee) : prev.cost_labour_fee,
       cost_insurance_fee: totalInsuranceFee > 0 ? String(totalInsuranceFee) : prev.cost_insurance_fee,
     }));
@@ -269,6 +291,7 @@ const FinanceManagement: React.FC = () => {
         worker_id: workerId,
         worker_name: String((worker as any)?.labour_name || '').trim() || `勞工#${workerId}`,
         labour_status: meta?.status || labourStatusToUi(String((worker as any)?.labour_status || '')),
+        on_duty_date: form.on_duty_date || getWorkerOnDutyDate(worker) || undefined,
         labour_company_id: String((worker as any)?.labour_company_id || profile?.labour_company_id || '').trim() || undefined,
         labour_company_name: String((worker as any)?.labour_company_name || profile?.labour_company_name || '').trim() || undefined,
         cost_visa_fee: toMoney(form.cost_visa_fee),
@@ -345,6 +368,7 @@ const FinanceManagement: React.FC = () => {
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">工人名字</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">狀態</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">在職日期</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">所屬勞務公司</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">成本合計</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">收入合計</th>
@@ -355,19 +379,20 @@ const FinanceManagement: React.FC = () => {
             <tbody className="bg-white/30 divide-y divide-gray-200">
               {loading && rows.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-10 text-center">
+                  <td colSpan={8} className="px-6 py-10 text-center">
                     <Loader2 className="w-6 h-6 animate-spin text-apple-blue mx-auto" />
                   </td>
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-10 text-center text-gray-500">暫無財務資料</td>
+                  <td colSpan={8} className="px-6 py-10 text-center text-gray-500">暫無財務資料</td>
                 </tr>
               ) : (
                 rows.map((row) => (
                   <tr key={row.worker_id} className="hover:bg-gray-50/50">
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{row.worker_name || '-'}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{row.labour_status || '-'}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{toDateInputValue((row as any).on_duty_date) || '-'}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{row.labour_company_name || '-'}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{formatMoney((row as any).totalCost || 0)} 元</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{formatMoney((row as any).totalIncome || 0)} 元</td>
@@ -416,6 +441,16 @@ const FinanceManagement: React.FC = () => {
                 </option>
               ))}
             </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">在職日期</label>
+            <input
+              type="date"
+              value={form.on_duty_date}
+              readOnly
+              className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-apple-sm text-gray-600"
+            />
+            <p className="text-xs text-gray-500 mt-1 ml-1">自動讀取勞工管理資料</p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

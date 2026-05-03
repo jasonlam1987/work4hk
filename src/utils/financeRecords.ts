@@ -7,6 +7,7 @@ export type FinanceRecord = {
   worker_id: number;
   worker_name: string;
   labour_status: string;
+  on_duty_date?: string;
   labour_company_id?: string;
   labour_company_name?: string;
   cost_visa_fee: number;
@@ -41,6 +42,7 @@ const normalizeRecord = (row: FinanceRecord): FinanceRecord => {
     worker_id: Number(row.worker_id || 0),
     worker_name: String(row.worker_name || '').trim(),
     labour_status: String(row.labour_status || '').trim(),
+    on_duty_date: String((row as any).on_duty_date || '').trim() || undefined,
     labour_company_id: String(row.labour_company_id || '').trim() || undefined,
     labour_company_name: String(row.labour_company_name || '').trim() || undefined,
     cost_visa_fee: costVisa,
