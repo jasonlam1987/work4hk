@@ -60,14 +60,36 @@ export const applyExtendedProfile = <T extends User>(users: T[]): T[] => {
 export const saveExtendedProfile = (user: { id?: string | number; username?: string; email?: string; salutation?: string }) => {
   const map = readMap();
   const key = keyOf(user.id, user.username);
+  const existing =
+    map[key] ||
+    (user.username ? map[`username:${String(user.username).trim().toLowerCase()}`] : undefined) ||
+    {};
+  const nextEmail = String(user.email || '').trim();
+  const nextSalutation = String(user.salutation || '').trim();
   map[key] = {
-    email: String(user.email || '').trim() || undefined,
-    salutation: String(user.salutation || '').trim() || undefined,
+    // Avoid overwriting previously saved values with empty payloads from partial updates.
+    email: nextEmail || String(existing.email || '').trim() || undefined,
+    salutation: nextSalutation || String(existing.salutation || '').trim() || undefined,
   };
   if (user.username) {
     map[`username:${String(user.username).trim().toLowerCase()}`] = map[key];
   }
   writeMap(map);
+};
+
+export const hydrateExtendedProfileFromUsers = (users: User[]) => {
+  if (!Array.isArray(users) || users.length === 0) return;
+  users.forEach((u) => {
+    const email = String(u?.email || '').trim();
+    const salutation = String(u?.salutation || '').trim();
+    if (!email && !salutation) return;
+    saveExtendedProfile({
+      id: u?.id,
+      username: u?.username,
+      email: email || undefined,
+      salutation: salutation || undefined,
+    });
+  });
 };
 
 export const removeExtendedProfile = (user: { id?: string | number; username?: string }) => {

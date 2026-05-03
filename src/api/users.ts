@@ -1,5 +1,5 @@
 import apiClient from './client';
-import { applyExtendedProfile, saveExtendedProfile, removeExtendedProfile } from '../utils/userDirectoryProfile';
+import { applyExtendedProfile, hydrateExtendedProfileFromUsers, saveExtendedProfile, removeExtendedProfile } from '../utils/userDirectoryProfile';
 
 const DELETED_USERS_KEY = 'mock_deleted_user_ids';
 let supportsExtendedFields = true;
@@ -79,6 +79,8 @@ export const getUsers = async () => {
   const response = await apiClient.get<User[]>('/users');
   const deleted = new Set(readDeletedUserIds());
   const active = response.data.filter(u => !deleted.has(u.id) && Number(u.is_active) !== 0);
+  // Persist server-returned extended fields to local backup to reduce accidental field loss.
+  hydrateExtendedProfileFromUsers(active);
   return applyExtendedProfile(active);
 };
 
