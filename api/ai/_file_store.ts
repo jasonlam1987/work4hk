@@ -23,7 +23,7 @@ const LOG_KEEP_DAYS = 30;
 
 export type FileRecord = {
   uid: string;
-  module: 'employers' | 'approvals' | 'workers';
+  module: 'employers' | 'approvals' | 'workers' | 'finance';
   owner_id: number;
   folder: string;
   original_name: string;
@@ -282,14 +282,14 @@ export const storeFileFromDataUrl = async (
   body: any,
   actor?: { user_id?: string; user_name?: string }
 ) => {
-  const moduleName = String(body?.module || '').trim() as 'employers' | 'approvals' | 'workers';
+  const moduleName = String(body?.module || '').trim() as 'employers' | 'approvals' | 'workers' | 'finance';
   const ownerId = Number(body?.owner_id || 0);
   const folder = String(body?.folder || '').trim();
   const fileName = String(body?.file_name || '').trim();
   const mimeType = String(body?.mime_type || '').trim();
   const dataUrl = String(body?.data_url || '').trim();
 
-  if (!moduleName || !['employers', 'approvals', 'workers'].includes(moduleName)) throw new Error('invalid module');
+  if (!moduleName || !['employers', 'approvals', 'workers', 'finance'].includes(moduleName)) throw new Error('invalid module');
   if (!ownerId || ownerId < 1) throw new Error('invalid owner_id');
   if (!folder || !fileName || !mimeType || !dataUrl.startsWith('data:')) throw new Error('invalid payload');
   if (!ALLOWED.has(mimeType)) throw new Error('unsupported file type');

@@ -145,10 +145,10 @@ export default async function handler(req: any, res: any) {
     }
 
     if (req.method === 'GET') {
-      const moduleName = String(req?.query?.module || '').trim() as 'employers' | 'approvals' | 'workers';
+      const moduleName = String(req?.query?.module || '').trim() as 'employers' | 'approvals' | 'workers' | 'finance';
       const ownerId = Number(req?.query?.owner_id || 0);
       const folder = String(req?.query?.folder || '').trim();
-      if (!moduleName || !['employers', 'approvals', 'workers'].includes(moduleName)) {
+      if (!moduleName || !['employers', 'approvals', 'workers', 'finance'].includes(moduleName)) {
         return respond(res, 400, { code: 'INVALID_MODULE', error: 'invalid module' });
       }
       if (!ownerId || ownerId < 1) return respond(res, 400, { code: 'INVALID_OWNER_ID', error: 'invalid owner_id' });
@@ -204,13 +204,13 @@ export default async function handler(req: any, res: any) {
       return respond(res, 200, { ok: true });
     }
 
-    const moduleName = String(body?.module || '').trim() as 'employers' | 'approvals' | 'workers';
+    const moduleName = String(body?.module || '').trim() as 'employers' | 'approvals' | 'workers' | 'finance';
     const ownerId = Number(body?.owner_id || 0);
     const folder = String(body?.folder || '').trim();
     const fileName = String(body?.file_name || '').trim();
     const mimeType = String(body?.mime_type || '').trim();
     const dataUrl = String(body?.data_url || '').trim();
-    if (!moduleName || !['employers', 'approvals', 'workers'].includes(moduleName)) throw new Error('invalid module');
+    if (!moduleName || !['employers', 'approvals', 'workers', 'finance'].includes(moduleName)) throw new Error('invalid module');
     if (!ownerId || ownerId < 1) throw new Error('invalid owner_id');
     if (!folder || !fileName || !mimeType || !dataUrl.startsWith('data:')) throw new Error('invalid payload');
     if (!ALLOWED.has(mimeType)) throw new Error('unsupported file type');
