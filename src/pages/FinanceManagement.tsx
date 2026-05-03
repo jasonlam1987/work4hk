@@ -81,6 +81,30 @@ const getWorkerOnDutyDate = (worker?: Worker) => {
   return '';
 };
 
+const getWorkerDepartureDate = (worker?: Worker) => {
+  if (!worker) return '';
+  const workerId = Number((worker as any)?.id || 0);
+  const profile = getWorkerProfile(workerId);
+  if ((worker as any)?.departure_date) return toDateInputValue((worker as any).departure_date);
+  if (profile?.departure_date) return toDateInputValue(profile.departure_date);
+  const batches = Array.isArray(profile?.work_batches) ? profile.work_batches : [];
+  const resignedBatch = batches.find((b) => labourStatusToUi(String(b?.status || '')) === '離職' && b?.departure_date);
+  if (resignedBatch?.departure_date) return toDateInputValue(resignedBatch.departure_date);
+  return '';
+};
+
+const calcElapsedWholeMonths = (startDate: string, endDate: string) => {
+  const s = toDateInputValue(startDate);
+  const e = toDateInputValue(endDate);
+  if (!s || !e) return 0;
+  const sd = new Date(`${s}T00:00:00`);
+  const ed = new Date(`${e}T00:00:00`);
+  if (Number.isNaN(sd.getTime()) || Number.isNaN(ed.getTime()) || ed.getTime() <= sd.getTime()) return 0;
+  let months = (ed.getFullYear() - sd.getFullYear()) * 12 + (ed.getMonth() - sd.getMonth());
+  if (ed.getDate() < sd.getDate()) months -= 1;
+  return Math.max(0, months);
+};
+
 type StoredFinanceFile = {
   uid: string;
   workerId: number;
@@ -164,10 +188,30 @@ const FinanceManagement: React.FC = () => {
   }, [workers]);
 
   const pendingCount = useMemo(() => countFinancePendingByWorkers(workers, records), [workers, records]);
+  const workerById = useMemo(() => {
+    const map = new Map<number, Worker>();
+    for (const w of workers || []) map.set(Number((w as any)?.id || 0), w);
+    return map;
+  }, [workers]);
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
     const list = records.map((r) => {
+      const workerId = Number(r.worker_id || 0);
+      const worker = workerById.get(workerId);
+      const profile = getWorkerProfile(workerId);
+      const status = worker ? labourStatusToUi(String((worker as any)?.labour_status || '')) : String(r.labour_status || '');
+      const onDutyDate = getWorkerOnDutyDate(worker) || toDateInputValue((r as any).on_duty_date);
+      const departureDate = getWorkerDepartureDate(worker);
+      const employmentMonths = getWorkerEmploymentMonths(worker);
+      const elapsedMonths = calcElapsedWholeMonths(onDutyDate, departureDate);
+      const remainingMonths = Math.max(0, employmentMonths - elapsedMonths);
+      const companyId = String((worker as any)?.labour_company_id || profile?.labour_company_id || r.labour_company_id || '').trim();
+      const companyName = String((worker as any)?.labour_company_name || profile?.labour_company_name || r.labour_company_name || '').trim().toLowerCase();
+      const labourFeeUnit =
+        Number(labourFeeUnitByCompanyId.get(companyId) || 0) ||
+        Number(labourFeeUnitByCompanyName.get(companyName) || 0);
+      const refundAmount = status === '離職' ? Math.max(0, remainingMonths * labourFeeUnit) : 0;
       const totalCost =
         Number(r.cost_visa_fee || 0) +
         Number(r.cost_labour_fee || 0) +
@@ -176,6 +220,13 @@ const FinanceManagement: React.FC = () => {
       const totalIncome = Number(r.income_labour_fee || 0) + Number(r.income_agency_fee || 0);
       return {
         ...r,
+        labour_status: status,
+        on_duty_date: onDutyDate || undefined,
+        departure_date: departureDate || undefined,
+        labour_refund_unit_price: labourFeeUnit,
+        labour_refund_remaining_months: remainingMonths,
+        labour_refund_amount: refundAmount,
+        labour_refund_required: refundAmount > 0,
         totalCost,
         totalIncome,
         actualProfit: totalIncome - totalCost,
@@ -185,7 +236,7 @@ const FinanceManagement: React.FC = () => {
     return list.filter((x) =>
       `${x.worker_name} ${x.labour_company_name || ''} ${x.labour_status}`.toLowerCase().includes(q)
     );
-  }, [records, search]);
+  }, [records, search, workerById, labourFeeUnitByCompanyId, labourFeeUnitByCompanyName]);
 
   const selectedWorker = useMemo(
     () => eligibleWorkers.find((w) => Number((w as any)?.id || 0) === Number(form.worker_id || 0)),
@@ -193,6 +244,11 @@ const FinanceManagement: React.FC = () => {
   );
 
   const selectedWorkerMonths = useMemo(() => getWorkerEmploymentMonths(selectedWorker), [selectedWorker]);
+  const selectedWorkerStatus = useMemo(
+    () => labourStatusToUi(String((selectedWorker as any)?.labour_status || '')),
+    [selectedWorker]
+  );
+  const selectedWorkerDepartureDate = useMemo(() => getWorkerDepartureDate(selectedWorker), [selectedWorker]);
   const selectedUnitPrices = useMemo(() => {
     if (!selectedWorker) return { labourUnit: 0, insuranceUnit: 0 };
     const workerId = Number((selectedWorker as any)?.id || 0);
@@ -213,6 +269,16 @@ const FinanceManagement: React.FC = () => {
     insuranceFeeUnitByCompanyId,
     insuranceFeeUnitByCompanyName,
   ]);
+  const selectedWorkerRefund = useMemo(() => {
+    if (!selectedWorker || selectedWorkerStatus !== '離職') return { remainingMonths: 0, amount: 0 };
+    const onDutyDate = getWorkerOnDutyDate(selectedWorker) || form.on_duty_date;
+    const elapsed = calcElapsedWholeMonths(onDutyDate, selectedWorkerDepartureDate);
+    const remainingMonths = Math.max(0, selectedWorkerMonths - elapsed);
+    return {
+      remainingMonths,
+      amount: remainingMonths * Number(selectedUnitPrices.labourUnit || 0),
+    };
+  }, [selectedWorker, selectedWorkerStatus, form.on_duty_date, selectedWorkerDepartureDate, selectedWorkerMonths, selectedUnitPrices.labourUnit]);
 
   const computedProfit = useMemo(() => {
     const totalCost =
@@ -467,6 +533,7 @@ const FinanceManagement: React.FC = () => {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">狀態</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">在職日期</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">所屬勞務公司</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">退款金額</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">成本合計</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">收入合計</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">實際利潤</th>
@@ -476,13 +543,13 @@ const FinanceManagement: React.FC = () => {
             <tbody className="bg-white/30 divide-y divide-gray-200">
               {loading && rows.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-6 py-10 text-center">
+                  <td colSpan={9} className="px-6 py-10 text-center">
                     <Loader2 className="w-6 h-6 animate-spin text-apple-blue mx-auto" />
                   </td>
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-6 py-10 text-center text-gray-500">暫無財務資料</td>
+                  <td colSpan={9} className="px-6 py-10 text-center text-gray-500">暫無財務資料</td>
                 </tr>
               ) : (
                 rows.map((row) => (
@@ -490,7 +557,20 @@ const FinanceManagement: React.FC = () => {
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{row.worker_name || '-'}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{row.labour_status || '-'}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{toDateInputValue((row as any).on_duty_date) || '-'}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{row.labour_company_name || '-'}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                      <div className="flex items-center gap-2">
+                        <span>{row.labour_company_name || '-'}</span>
+                        {(row as any).labour_refund_required && (
+                          <span className="px-2 py-0.5 rounded-full text-xs bg-red-50 text-red-700 border border-red-100">需退款</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className={clsx(
+                      'px-6 py-4 whitespace-nowrap text-sm font-medium',
+                      Number((row as any).labour_refund_amount || 0) > 0 ? 'text-red-600' : 'text-gray-500'
+                    )}>
+                      {formatMoney(Number((row as any).labour_refund_amount || 0))} 元
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{formatMoney((row as any).totalCost || 0)} 元</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{formatMoney((row as any).totalIncome || 0)} 元</td>
                     <td className={clsx(
@@ -649,7 +729,12 @@ const FinanceManagement: React.FC = () => {
 
           {selectedWorker && (
             <div className="text-xs text-gray-500">
-              工人狀態：{labourStatusToUi(String((selectedWorker as any).labour_status || ''))}
+              工人狀態：{selectedWorkerStatus}
+            </div>
+          )}
+          {selectedWorker && selectedWorkerStatus === '離職' && (
+            <div className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-apple-sm px-3 py-2">
+              已離職：退款金額 = 剩餘月份({selectedWorkerRefund.remainingMonths}) × 每月勞務費({formatMoney(selectedUnitPrices.labourUnit)}) = {formatMoney(selectedWorkerRefund.amount)} 元（需向所屬勞務公司退款）
             </div>
           )}
 
