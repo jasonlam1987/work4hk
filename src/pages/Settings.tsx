@@ -81,7 +81,12 @@ const Settings: React.FC = () => {
   const [saving, setSaving] = useState(false);
 
   // Form states
-  const [partnerForm, setPartnerForm] = useState<PartnerCreate>({ name: '' });
+  const [partnerForm, setPartnerForm] = useState<PartnerCreate>({
+    name: '',
+    company_code: '',
+    contact_person: '',
+    price_per_person_month: null,
+  });
   const [authorizedPartyForm, setAuthorizedPartyForm] = useState<AuthorizedPartyInput>({
     company_name: '',
     business_registration_number: '',
@@ -123,6 +128,22 @@ const Settings: React.FC = () => {
     const idx = Math.min(units.length - 1, Math.floor(Math.log(size) / Math.log(1024)));
     const value = size / Math.pow(1024, idx);
     return `${value.toFixed(value >= 100 || idx === 0 ? 0 : value >= 10 ? 1 : 2)} ${units[idx]}`;
+  };
+
+  const normalizePriceInput = (raw: string) => {
+    const cleaned = String(raw || '')
+      .replace(/[^\d.]/g, '')
+      .replace(/(\..*)\./g, '$1');
+    if (!cleaned.trim()) return null;
+    const parsed = Number(cleaned);
+    if (!Number.isFinite(parsed) || parsed < 0) return null;
+    return parsed;
+  };
+
+  const formatPriceDisplay = (value: number | null | undefined) => {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 0) return '-';
+    return `${n}元/人/月`;
   };
 
   const safePathSegment = (input: string) =>
@@ -319,7 +340,14 @@ const Settings: React.FC = () => {
     setIsEditing(false);
     setSelectedId(null);
     setSelectedAuthorizedPartyId(null);
-    if (activeTab === 'partners') setPartnerForm({ name: '' });
+    if (activeTab === 'partners') {
+      setPartnerForm({
+        name: '',
+        company_code: '',
+        contact_person: '',
+        price_per_person_month: null,
+      });
+    }
     if (activeTab === 'authorized_parties') {
       setAuthorizedPartyForm({
         company_name: '',
@@ -340,6 +368,9 @@ const Settings: React.FC = () => {
     setSelectedAuthorizedPartyId(null);
     setPartnerForm({
       name: item.name,
+      company_code: item.company_code || '',
+      contact_person: item.contact_person || item.phone || '',
+      price_per_person_month: item.price_per_person_month ?? null,
       phone: item.phone || '',
       email: item.email || '',
       remarks: item.remarks || '',
@@ -813,10 +844,10 @@ const Settings: React.FC = () => {
       <table className="min-w-full divide-y divide-gray-200">
         <thead className="bg-gray-50/50">
           <tr>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">名稱</th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">聯絡電話</th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">備註</th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">勞務公司名字</th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">勞務公司編號</th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">聯繫人</th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">合作價格</th>
             <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
           </tr>
         </thead>
@@ -827,9 +858,9 @@ const Settings: React.FC = () => {
             partners.map((item) => (
               <tr key={item.id} className="hover:bg-gray-50/50">
                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{item.name}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.phone || '-'}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.email || '-'}</td>
-                <td className="px-6 py-4 text-sm text-gray-500 truncate max-w-xs">{item.remarks || '-'}</td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.company_code || '-'}</td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.contact_person || item.phone || '-'}</td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{formatPriceDisplay(item.price_per_person_month)}</td>
                 <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                   <button onClick={() => handleOpenEdit(item)} className="text-apple-blue hover:text-blue-900 bg-blue-50 hover:bg-blue-100 p-2 rounded-full transition-colors">
                     <Edit2 className="w-4 h-4" />
@@ -845,7 +876,7 @@ const Settings: React.FC = () => {
 
   const getTabLabel = (tab: Tab) => {
     switch(tab) {
-      case 'partners': return '合作方';
+      case 'partners': return '勞務公司管理';
       case 'authorized_parties': return '授權方管理';
       case 'users': return '用戶管理';
       case 'api_keys': return 'API 金鑰管理';
@@ -858,7 +889,7 @@ const Settings: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold text-apple-dark">系統設定</h1>
-          <p className="text-gray-500 mt-1">管理合作方、授權方、用戶與系統 API</p>
+          <p className="text-gray-500 mt-1">管理勞務公司、授權方、用戶與系統 API</p>
         </div>
         {(activeTab === 'partners' || activeTab === 'authorized_parties' || activeTab === 'users') && (
           <button 
@@ -1041,7 +1072,7 @@ const Settings: React.FC = () => {
           ) : (
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">名稱 *</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">勞務公司名字 *</label>
                 <input
                   type="text"
                   value={partnerForm.name}
@@ -1051,31 +1082,48 @@ const Settings: React.FC = () => {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">聯絡電話</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">勞務公司編號 *</label>
                 <input
                   type="text"
-                  value={partnerForm.phone || ''}
-                  onChange={(e) => setPartnerForm({ ...partnerForm, phone: e.target.value })}
+                  value={partnerForm.company_code || ''}
+                  onChange={(e) => setPartnerForm({ ...partnerForm, company_code: e.target.value })}
                   className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                  required
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">Email</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">聯繫人 *</label>
                 <input
-                  type="email"
-                  value={partnerForm.email || ''}
-                  onChange={(e) => setPartnerForm({ ...partnerForm, email: e.target.value })}
+                  type="text"
+                  value={partnerForm.contact_person || ''}
+                  onChange={(e) => setPartnerForm({ ...partnerForm, contact_person: e.target.value })}
                   className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                  required
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">備註</label>
-                <textarea
-                  value={partnerForm.remarks || ''}
-                  onChange={(e) => setPartnerForm({ ...partnerForm, remarks: e.target.value })}
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">合作價格（元/人/月）*</label>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={
+                    partnerForm.price_per_person_month == null
+                      ? ''
+                      : String(partnerForm.price_per_person_month)
+                  }
+                  onChange={(e) =>
+                    setPartnerForm({
+                      ...partnerForm,
+                      price_per_person_month: normalizePriceInput(e.target.value),
+                    })
+                  }
+                  placeholder="輸入 X"
                   className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
-                  rows={3}
+                  required
                 />
+                <p className="text-xs text-gray-500 mt-1">
+                  顯示：{formatPriceDisplay(partnerForm.price_per_person_month)}
+                </p>
               </div>
             </div>
           )}
