@@ -4,7 +4,7 @@ import clsx from 'clsx';
 import Modal from '../components/Modal';
 import { Worker, getWorkers } from '../api/workers';
 import { getWorkerProfile } from '../utils/workerProfile';
-import { labourStatusToUi } from '../utils/workersForm';
+import { labourStatusToUi, parseEmploymentMonths } from '../utils/workersForm';
 import { LabourCompany, readLabourCompanies } from '../utils/labourCompanies';
 import { FinanceRecord, countFinancePendingByWorkers, readFinanceRecords, upsertFinanceRecord } from '../utils/financeRecords';
 
@@ -45,6 +45,19 @@ const cleanMoneyInput = (value: string) =>
 
 const formatMoney = (value: number) =>
   new Intl.NumberFormat('zh-HK', { maximumFractionDigits: 2 }).format(Number(value || 0));
+
+const getWorkerEmploymentMonths = (worker?: Worker) => {
+  if (!worker) return 0;
+  const workerId = Number((worker as any)?.id || 0);
+  const profile = getWorkerProfile(workerId);
+  const directMonths = Number(parseEmploymentMonths((worker as any)?.employment_term || ''));
+  if (Number.isFinite(directMonths) && directMonths > 0) return directMonths;
+  const batches = Array.isArray(profile?.work_batches) ? profile.work_batches : [];
+  const latest = batches[0];
+  const batchMonths = Number(latest?.employment_term_months || 0);
+  if (Number.isFinite(batchMonths) && batchMonths > 0) return batchMonths;
+  return 0;
+};
 
 const FinanceManagement: React.FC = () => {
   const [workers, setWorkers] = useState<Worker[]>([]);
@@ -124,6 +137,7 @@ const FinanceManagement: React.FC = () => {
       toMoney(form.income_agency_fee);
     return totalIncome - totalCost;
   }, [form]);
+  const selectedWorkerMonths = useMemo(() => getWorkerEmploymentMonths(selectedWorker), [selectedWorker]);
 
   const loadData = async () => {
     setLoading(true);
@@ -171,10 +185,12 @@ const FinanceManagement: React.FC = () => {
     const labourFee =
       Number(labourFeeByCompanyId.get(companyId) || 0) ||
       Number(labourFeeByCompanyName.get(companyName) || 0);
+    const months = getWorkerEmploymentMonths(worker);
+    const totalLabourFee = labourFee > 0 && months > 0 ? labourFee * months : labourFee;
     setForm((prev) => ({
       ...prev,
       worker_id: workerId,
-      cost_labour_fee: labourFee > 0 ? String(labourFee) : prev.cost_labour_fee,
+      cost_labour_fee: totalLabourFee > 0 ? String(totalLabourFee) : prev.cost_labour_fee,
     }));
   };
 
@@ -366,6 +382,14 @@ const FinanceManagement: React.FC = () => {
                   onChange={(e) => setForm((prev) => ({ ...prev, cost_labour_fee: cleanMoneyInput(e.target.value) }))}
                   className="w-full px-3 py-2 border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue"
                 />
+                {!!selectedWorker && (
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    已按單價 × 僱傭月份計算：{formatMoney(
+                      (Number(labourFeeByCompanyId.get(String((selectedWorker as any)?.labour_company_id || getWorkerProfile(Number((selectedWorker as any)?.id || 0))?.labour_company_id || '')) || 0) ||
+                        Number(labourFeeByCompanyName.get(String((selectedWorker as any)?.labour_company_name || getWorkerProfile(Number((selectedWorker as any)?.id || 0))?.labour_company_name || '').trim().toLowerCase()) || 0))
+                    )} × {selectedWorkerMonths || 0} 月
+                  </p>
+                )}
               </div>
               <div>
                 <label className="block text-xs text-gray-600 mb-1">保險費（元）</label>
