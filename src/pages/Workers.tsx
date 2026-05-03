@@ -282,6 +282,7 @@ const Workers: React.FC = () => {
     if (!key) return undefined;
     return quotaOptions.find(x => x.seq === key)?.detail;
   }, [quotaOptions, selectedQuotaSeq]);
+  const quotaSeqLocked = isEditing && Boolean(selectedQuotaSeq);
 
   useEffect(() => {
     if (!approvalId) return;
@@ -322,6 +323,8 @@ const Workers: React.FC = () => {
 
   useEffect(() => {
     if (!selectedQuotaSeq) return;
+    // For existing workers, quota sequence must stay consistent across statuses.
+    if (isEditing) return;
     const key = String(selectedQuotaSeq).replace(/[^\d]/g, '').padStart(4, '0').slice(-4);
     const exists = quotaOptions.some(x => x.seq === key);
     if (!exists) {
@@ -1274,7 +1277,7 @@ const Workers: React.FC = () => {
                   <select
                     value={selectedQuotaSeq}
                     onChange={(e) => applyQuotaToWorkerForm(e.target.value)}
-                    disabled={!approvalId || quotaOptions.length === 0}
+                    disabled={quotaSeqLocked || !approvalId || quotaOptions.length === 0}
                     className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all disabled:opacity-60"
                     required
                   >
@@ -1283,6 +1286,9 @@ const Workers: React.FC = () => {
                       <option key={opt.seq} value={opt.seq}>{opt.seq}</option>
                     ))}
                   </select>
+                  {quotaSeqLocked && (
+                    <p className="text-xs text-gray-500 mt-1 ml-1">配額編號已鎖定；切換勞工狀態不需重選。</p>
+                  )}
                   {selectedQuotaDetail && (
                     <p className="text-xs text-gray-500 mt-1 ml-1">
                       已套入：{selectedQuotaDetail.job_title || '-'} · 工資 {selectedQuotaDetail.monthly_salary ?? '-'} · {selectedQuotaDetail.employment_months ?? '-'} 個月
