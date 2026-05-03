@@ -70,7 +70,8 @@ type LabourCompanyFormState = {
   company_name: string;
   company_code: string;
   contact_person: string;
-  price_per_person_month: number | null;
+  labour_fee_per_person_month: number | null;
+  insurance_fee_per_person_month: number | null;
 };
 
 const Settings: React.FC = () => {
@@ -103,7 +104,8 @@ const Settings: React.FC = () => {
     company_name: '',
     company_code: '',
     contact_person: '',
-    price_per_person_month: null,
+    labour_fee_per_person_month: null,
+    insurance_fee_per_person_month: null,
   });
   const [authorizedPartyForm, setAuthorizedPartyForm] = useState<AuthorizedPartyInput>({
     company_name: '',
@@ -379,7 +381,8 @@ const Settings: React.FC = () => {
         company_name: '',
         company_code: '',
         contact_person: '',
-        price_per_person_month: null,
+        labour_fee_per_person_month: null,
+        insurance_fee_per_person_month: null,
       });
     }
     if (activeTab === 'authorized_parties') {
@@ -419,7 +422,8 @@ const Settings: React.FC = () => {
       company_name: item.company_name || '',
       company_code: item.company_code || '',
       contact_person: item.contact_person || '',
-      price_per_person_month: item.price_per_person_month ?? null,
+      labour_fee_per_person_month: item.labour_fee_per_person_month ?? item.price_per_person_month ?? null,
+      insurance_fee_per_person_month: item.insurance_fee_per_person_month ?? null,
     });
     setIsModalOpen(true);
   };
@@ -453,8 +457,9 @@ const Settings: React.FC = () => {
         return;
       }
       if (activeTab === 'labour_companies') {
-        const price = Number(labourCompanyForm.price_per_person_month);
-        if (!Number.isFinite(price) || price < 0) {
+        const labourFee = Number(labourCompanyForm.labour_fee_per_person_month);
+        const insuranceFee = Number(labourCompanyForm.insurance_fee_per_person_month);
+        if (!Number.isFinite(labourFee) || labourFee < 0 || !Number.isFinite(insuranceFee) || insuranceFee < 0) {
           alert('合作價格格式不正確，請輸入有效數字');
           return;
         }
@@ -462,7 +467,8 @@ const Settings: React.FC = () => {
           company_name: String(labourCompanyForm.company_name || '').trim(),
           company_code: String(labourCompanyForm.company_code || '').trim(),
           contact_person: String(labourCompanyForm.contact_person || '').trim(),
-          price_per_person_month: price,
+          labour_fee_per_person_month: labourFee,
+          insurance_fee_per_person_month: insuranceFee,
         };
         if (!payload.company_name || !payload.company_code || !payload.contact_person) {
           alert('請完整填寫勞務公司資料');
@@ -916,20 +922,22 @@ const Settings: React.FC = () => {
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">勞務公司名字</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">勞務公司編號</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">聯繫人</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">合作價格</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">勞務費（元/人/月）</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">保險費（元/人/月）</th>
               <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
             </tr>
           </thead>
           <tbody className="bg-white/30 divide-y divide-gray-200">
             {labourCompanies.length === 0 ? (
-              <tr><td colSpan={5} className="px-6 py-8 text-center text-gray-500">找不到資料</td></tr>
+              <tr><td colSpan={6} className="px-6 py-8 text-center text-gray-500">找不到資料</td></tr>
             ) : (
               labourCompanies.map((item) => (
                 <tr key={item.id} className="hover:bg-gray-50/50">
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{item.company_name || '-'}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.company_code || '-'}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.contact_person || '-'}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{formatPriceDisplay(item.price_per_person_month)}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{formatPriceDisplay(item.labour_fee_per_person_month ?? item.price_per_person_month)}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{formatPriceDisplay(item.insurance_fee_per_person_month)}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                     <button onClick={() => handleOpenEditLabourCompany(item)} className="text-apple-blue hover:text-blue-900 bg-blue-50 hover:bg-blue-100 p-2 rounded-full transition-colors">
                       <Edit2 className="w-4 h-4" />
@@ -1222,19 +1230,19 @@ const Settings: React.FC = () => {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">合作價格（元/人/月）*</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">勞務費（元/人/月）*</label>
                 <input
                   type="text"
                   inputMode="decimal"
                   value={
-                    labourCompanyForm.price_per_person_month == null
+                    labourCompanyForm.labour_fee_per_person_month == null
                       ? ''
-                      : String(labourCompanyForm.price_per_person_month)
+                      : String(labourCompanyForm.labour_fee_per_person_month)
                   }
                   onChange={(e) =>
                     setLabourCompanyForm({
                       ...labourCompanyForm,
-                      price_per_person_month: normalizePriceInput(e.target.value),
+                      labour_fee_per_person_month: normalizePriceInput(e.target.value),
                     })
                   }
                   placeholder="輸入 X"
@@ -1242,7 +1250,31 @@ const Settings: React.FC = () => {
                   required
                 />
                 <p className="text-xs text-gray-500 mt-1">
-                  顯示：{formatPriceDisplay(labourCompanyForm.price_per_person_month)}
+                  顯示：{formatPriceDisplay(labourCompanyForm.labour_fee_per_person_month)}
+                </p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1 ml-1">保險費（元/人/月）*</label>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={
+                    labourCompanyForm.insurance_fee_per_person_month == null
+                      ? ''
+                      : String(labourCompanyForm.insurance_fee_per_person_month)
+                  }
+                  onChange={(e) =>
+                    setLabourCompanyForm({
+                      ...labourCompanyForm,
+                      insurance_fee_per_person_month: normalizePriceInput(e.target.value),
+                    })
+                  }
+                  placeholder="輸入 X"
+                  className="w-full px-4 py-2 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50 focus:border-apple-blue transition-all"
+                  required
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  顯示：{formatPriceDisplay(labourCompanyForm.insurance_fee_per_person_month)}
                 </p>
               </div>
             </div>

@@ -5,7 +5,10 @@ export type LabourCompany = {
   company_name: string;
   company_code: string;
   contact_person: string;
-  price_per_person_month: number;
+  labour_fee_per_person_month: number;
+  insurance_fee_per_person_month: number;
+  // Backward compatibility for old data model.
+  price_per_person_month?: number;
   created_at: string;
   updated_at: string;
 };
@@ -14,7 +17,8 @@ export type LabourCompanyInput = {
   company_name: string;
   company_code: string;
   contact_person: string;
-  price_per_person_month: number;
+  labour_fee_per_person_month: number;
+  insurance_fee_per_person_month: number;
 };
 
 const normalizePrice = (value: unknown) => {
@@ -28,7 +32,10 @@ const normalizeItem = (item: LabourCompany): LabourCompany => ({
   company_name: String(item.company_name || '').trim(),
   company_code: String(item.company_code || '').trim(),
   contact_person: String(item.contact_person || '').trim(),
-  price_per_person_month: normalizePrice(item.price_per_person_month),
+  labour_fee_per_person_month: normalizePrice(
+    item.labour_fee_per_person_month ?? item.price_per_person_month
+  ),
+  insurance_fee_per_person_month: normalizePrice(item.insurance_fee_per_person_month),
 });
 
 export const readLabourCompanies = (): LabourCompany[] => {
@@ -87,7 +94,7 @@ export const filterLabourCompanies = (items: LabourCompany[], q: string) => {
   const keyword = String(q || '').trim().toLowerCase();
   if (!keyword) return items;
   return items.filter((row) =>
-    `${row.company_name} ${row.company_code} ${row.contact_person} ${row.price_per_person_month}`
+    `${row.company_name} ${row.company_code} ${row.contact_person} ${row.labour_fee_per_person_month} ${row.insurance_fee_per_person_month}`
       .toLowerCase()
       .includes(keyword)
   );

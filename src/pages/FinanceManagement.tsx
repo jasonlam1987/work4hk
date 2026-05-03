@@ -38,13 +38,6 @@ const toInputMoney = (value: unknown) => {
   return String(n);
 };
 
-const toInputInsuranceUnit = (totalValue: unknown, months: number) => {
-  const total = toMoney(totalValue);
-  const m = Number(months || 0);
-  if (m > 0) return total ? String(total / m) : '';
-  return total ? String(total) : '';
-};
-
 const cleanMoneyInput = (value: string) =>
   String(value || '')
     .replace(/[^\d.]/g, '')
@@ -78,14 +71,32 @@ const FinanceManagement: React.FC = () => {
   const [form, setForm] = useState<FormState>(initialForm);
 
   const labourCompanies = useMemo<LabourCompany[]>(() => readLabourCompanies(), []);
-  const labourFeeByCompanyId = useMemo(() => {
+  const labourFeeUnitByCompanyId = useMemo(() => {
     const map = new Map<string, number>();
-    for (const c of labourCompanies) map.set(String(c.id || ''), Number(c.price_per_person_month || 0));
+    for (const c of labourCompanies) {
+      map.set(String(c.id || ''), Number(c.labour_fee_per_person_month ?? c.price_per_person_month || 0));
+    }
     return map;
   }, [labourCompanies]);
-  const labourFeeByCompanyName = useMemo(() => {
+  const labourFeeUnitByCompanyName = useMemo(() => {
     const map = new Map<string, number>();
-    for (const c of labourCompanies) map.set(String(c.company_name || '').trim().toLowerCase(), Number(c.price_per_person_month || 0));
+    for (const c of labourCompanies) {
+      map.set(String(c.company_name || '').trim().toLowerCase(), Number(c.labour_fee_per_person_month ?? c.price_per_person_month || 0));
+    }
+    return map;
+  }, [labourCompanies]);
+  const insuranceFeeUnitByCompanyId = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const c of labourCompanies) {
+      map.set(String(c.id || ''), Number(c.insurance_fee_per_person_month || 0));
+    }
+    return map;
+  }, [labourCompanies]);
+  const insuranceFeeUnitByCompanyName = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const c of labourCompanies) {
+      map.set(String(c.company_name || '').trim().toLowerCase(), Number(c.insurance_fee_per_person_month || 0));
+    }
     return map;
   }, [labourCompanies]);
 
@@ -135,22 +146,37 @@ const FinanceManagement: React.FC = () => {
   );
 
   const selectedWorkerMonths = useMemo(() => getWorkerEmploymentMonths(selectedWorker), [selectedWorker]);
-  const selectedInsuranceTotal = useMemo(() => {
-    const unit = toMoney(form.cost_insurance_fee);
-    const months = Number(selectedWorkerMonths || 0);
-    return months > 0 ? unit * months : unit;
-  }, [form.cost_insurance_fee, selectedWorkerMonths]);
+  const selectedUnitPrices = useMemo(() => {
+    if (!selectedWorker) return { labourUnit: 0, insuranceUnit: 0 };
+    const workerId = Number((selectedWorker as any)?.id || 0);
+    const profile = getWorkerProfile(workerId);
+    const companyId = String((selectedWorker as any)?.labour_company_id || profile?.labour_company_id || '').trim();
+    const companyName = String((selectedWorker as any)?.labour_company_name || profile?.labour_company_name || '').trim().toLowerCase();
+    const labourUnit =
+      Number(labourFeeUnitByCompanyId.get(companyId) || 0) ||
+      Number(labourFeeUnitByCompanyName.get(companyName) || 0);
+    const insuranceUnit =
+      Number(insuranceFeeUnitByCompanyId.get(companyId) || 0) ||
+      Number(insuranceFeeUnitByCompanyName.get(companyName) || 0);
+    return { labourUnit, insuranceUnit };
+  }, [
+    selectedWorker,
+    labourFeeUnitByCompanyId,
+    labourFeeUnitByCompanyName,
+    insuranceFeeUnitByCompanyId,
+    insuranceFeeUnitByCompanyName,
+  ]);
 
   const computedProfit = useMemo(() => {
     const totalCost =
       toMoney(form.cost_visa_fee) +
       toMoney(form.cost_labour_fee) +
-      selectedInsuranceTotal;
+      toMoney(form.cost_insurance_fee);
     const totalIncome =
       toMoney(form.income_labour_fee) +
       toMoney(form.income_agency_fee);
     return totalIncome - totalCost;
-  }, [form, selectedInsuranceTotal]);
+  }, [form]);
 
   const loadData = async () => {
     setLoading(true);
@@ -186,12 +212,6 @@ const FinanceManagement: React.FC = () => {
       income_labour_fee: toInputMoney(record.income_labour_fee),
       income_agency_fee: toInputMoney(record.income_agency_fee),
     });
-    const worker = workers.find((x) => Number((x as any)?.id || 0) === Number(record.worker_id || 0));
-    const months = getWorkerEmploymentMonths(worker);
-    setForm((prev) => ({
-      ...prev,
-      cost_insurance_fee: toInputInsuranceUnit(record.cost_insurance_fee, months),
-    }));
     setIsModalOpen(true);
   };
 
@@ -201,15 +221,20 @@ const FinanceManagement: React.FC = () => {
     const profile = getWorkerProfile(workerId);
     const companyId = String((worker as any)?.labour_company_id || profile?.labour_company_id || '').trim();
     const companyName = String((worker as any)?.labour_company_name || profile?.labour_company_name || '').trim().toLowerCase();
-    const labourFee =
-      Number(labourFeeByCompanyId.get(companyId) || 0) ||
-      Number(labourFeeByCompanyName.get(companyName) || 0);
+    const labourFeeUnit =
+      Number(labourFeeUnitByCompanyId.get(companyId) || 0) ||
+      Number(labourFeeUnitByCompanyName.get(companyName) || 0);
+    const insuranceFeeUnit =
+      Number(insuranceFeeUnitByCompanyId.get(companyId) || 0) ||
+      Number(insuranceFeeUnitByCompanyName.get(companyName) || 0);
     const months = getWorkerEmploymentMonths(worker);
-    const totalLabourFee = labourFee > 0 && months > 0 ? labourFee * months : labourFee;
+    const totalLabourFee = labourFeeUnit > 0 && months > 0 ? labourFeeUnit * months : labourFeeUnit;
+    const totalInsuranceFee = insuranceFeeUnit > 0 && months > 0 ? insuranceFeeUnit * months : insuranceFeeUnit;
     setForm((prev) => ({
       ...prev,
       worker_id: workerId,
       cost_labour_fee: totalLabourFee > 0 ? String(totalLabourFee) : prev.cost_labour_fee,
+      cost_insurance_fee: totalInsuranceFee > 0 ? String(totalInsuranceFee) : prev.cost_insurance_fee,
     }));
   };
 
@@ -237,7 +262,7 @@ const FinanceManagement: React.FC = () => {
         labour_company_name: String((worker as any)?.labour_company_name || profile?.labour_company_name || '').trim() || undefined,
         cost_visa_fee: toMoney(form.cost_visa_fee),
         cost_labour_fee: toMoney(form.cost_labour_fee),
-        cost_insurance_fee: selectedInsuranceTotal,
+        cost_insurance_fee: toMoney(form.cost_insurance_fee),
         income_labour_fee: toMoney(form.income_labour_fee),
         income_agency_fee: toMoney(form.income_agency_fee),
       });
@@ -403,10 +428,7 @@ const FinanceManagement: React.FC = () => {
                 />
                 {!!selectedWorker && (
                   <p className="text-[11px] text-gray-500 mt-1">
-                    已按單價 × 僱傭月份計算：{formatMoney(
-                      (Number(labourFeeByCompanyId.get(String((selectedWorker as any)?.labour_company_id || getWorkerProfile(Number((selectedWorker as any)?.id || 0))?.labour_company_id || '')) || 0) ||
-                        Number(labourFeeByCompanyName.get(String((selectedWorker as any)?.labour_company_name || getWorkerProfile(Number((selectedWorker as any)?.id || 0))?.labour_company_name || '').trim().toLowerCase()) || 0))
-                    )} × {selectedWorkerMonths || 0} 月
+                    已按單價 × 僱傭月份計算：{formatMoney(selectedUnitPrices.labourUnit)} × {selectedWorkerMonths || 0} 月
                   </p>
                 )}
               </div>
@@ -420,7 +442,7 @@ const FinanceManagement: React.FC = () => {
                 />
                 {!!selectedWorker && (
                   <p className="text-[11px] text-gray-500 mt-1">
-                    已按單價 × 僱傭月份計算：{formatMoney(toMoney(form.cost_insurance_fee))} × {selectedWorkerMonths || 0} 月
+                    已按單價 × 僱傭月份計算：{formatMoney(selectedUnitPrices.insuranceUnit)} × {selectedWorkerMonths || 0} 月
                   </p>
                 )}
               </div>
