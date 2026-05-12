@@ -27,7 +27,10 @@ import { listQuotaDeleteRequests } from '../utils/quotaDeleteRequests';
 import { listEntityDeleteRequests } from '../utils/entityDeleteRequests';
 import { subscribeDeleteNotice } from '../utils/deleteNotifications';
 import { getDisplayVersion } from '../utils/version';
-import { countFinancePendingByWorkers, readFinanceRecords } from '../utils/financeRecords';
+import { countFinancePendingByWorkers, readFinanceRecords, writeFinanceRecords } from '../utils/financeRecords';
+import { getFinanceRecordsRemote } from '../api/financeRecords';
+
+let lastFinanceSyncAt = 0;
 
 type PendingPreviewItem = {
   id: string;
@@ -79,7 +82,16 @@ const Layout: React.FC = () => {
     }
     try {
       const workers = await getWorkers({ limit: 500 }).catch(() => []);
-      const financeRecords = readFinanceRecords();
+      let financeRecords = readFinanceRecords();
+      const now = Date.now();
+      if (now - lastFinanceSyncAt > 15000) {
+        const remote = await getFinanceRecordsRemote().catch(() => null);
+        if (Array.isArray(remote)) {
+          financeRecords = remote;
+          writeFinanceRecords(remote);
+          lastFinanceSyncAt = now;
+        }
+      }
       setPendingFinanceCount(countFinancePendingByWorkers(workers || [], financeRecords));
     } catch {
       setPendingFinanceCount(0);

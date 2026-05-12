@@ -6,8 +6,9 @@ import { Worker, getWorkers } from '../api/workers';
 import { getWorkerProfile } from '../utils/workerProfile';
 import { labourStatusToUi, parseEmploymentMonths } from '../utils/workersForm';
 import { LabourCompany, readLabourCompanies } from '../utils/labourCompanies';
-import { FinanceRecord, countFinancePendingByWorkers, deleteFinanceRecord, readFinanceRecords, upsertFinanceRecord } from '../utils/financeRecords';
+import { FinanceRecord, countFinancePendingByWorkers, deleteFinanceRecord, readFinanceRecords, upsertFinanceRecord, writeFinanceRecords } from '../utils/financeRecords';
 import { deleteManagedFile, downloadManagedFile, listManagedFiles, uploadManagedFile } from '../api/files';
+import { bulkUpsertFinanceRecordsRemote, deleteFinanceRecordRemote, getFinanceRecordsRemote, upsertFinanceRecordRemote } from '../api/financeRecords';
 
 type FormState = {
   worker_id: number;
@@ -295,13 +296,28 @@ const FinanceManagement: React.FC = () => {
   const loadData = async () => {
     setLoading(true);
     setError('');
+    const localRecords = readFinanceRecords();
+    setRecords(localRecords);
     try {
-      const [workerList] = await Promise.all([getWorkers({ limit: 500 })]);
+      const [workerList, remoteRecords] = await Promise.all([
+        getWorkers({ limit: 500 }),
+        getFinanceRecordsRemote().catch(() => null),
+      ]);
       setWorkers(workerList || []);
-      setRecords(readFinanceRecords());
+      if (Array.isArray(remoteRecords)) {
+        setRecords(remoteRecords);
+        writeFinanceRecords(remoteRecords);
+      }
+      if (localRecords.length > 0) {
+        const merged = await bulkUpsertFinanceRecordsRemote(localRecords).catch(() => null);
+        if (Array.isArray(merged)) {
+          setRecords(merged);
+          writeFinanceRecords(merged);
+        }
+      }
     } catch (err: any) {
       setWorkers([]);
-      setRecords(readFinanceRecords());
+      setRecords(localRecords);
       setError(err?.response?.data?.detail || '讀取財務資料失敗');
     } finally {
       setLoading(false);
@@ -391,10 +407,18 @@ const FinanceManagement: React.FC = () => {
     }
   };
 
-  const handleDeleteFinance = (workerId: number) => {
+  const handleDeleteFinance = async (workerId: number) => {
     const target = records.find((x) => Number(x.worker_id) === Number(workerId));
     const ok = window.confirm(`確定要刪除「${target?.worker_name || `勞工#${workerId}`}」的財務資料嗎？`);
     if (!ok) return;
+    try {
+      const remote = await deleteFinanceRecordRemote(workerId).catch(() => null);
+      if (Array.isArray(remote)) {
+        writeFinanceRecords(remote);
+        setRecords(remote);
+        return;
+      }
+    } catch {}
     const next = deleteFinanceRecord(workerId);
     setRecords(next);
   };
@@ -450,7 +474,7 @@ const FinanceManagement: React.FC = () => {
     const meta = workerMetaById.get(workerId);
     setSaving(true);
     try {
-      const row = upsertFinanceRecord({
+      const localRow = upsertFinanceRecord({
         worker_id: workerId,
         worker_name: String((worker as any)?.labour_name || '').trim() || `勞工#${workerId}`,
         labour_status: meta?.status || labourStatusToUi(String((worker as any)?.labour_status || '')),
@@ -464,11 +488,15 @@ const FinanceManagement: React.FC = () => {
         income_labour_fee: toMoney(form.income_labour_fee),
         income_agency_fee: toMoney(form.income_agency_fee),
       });
+      const remoteRow = await upsertFinanceRecordRemote(localRow).catch(() => null);
+      const row = remoteRow || localRow;
       setRecords((prev) => {
         const exists = prev.some((x) => Number(x.worker_id) === Number(row.worker_id));
-        return exists
+        const next = exists
           ? prev.map((x) => (Number(x.worker_id) === Number(row.worker_id) ? row : x))
           : [row, ...prev];
+        writeFinanceRecords(next);
+        return next;
       });
       setIsModalOpen(false);
     } finally {
