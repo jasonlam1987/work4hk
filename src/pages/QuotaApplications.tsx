@@ -3,7 +3,7 @@ import { CheckCircle2, Edit2, Plus, Search, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import Modal from '../components/Modal';
 import { Employer, getEmployers } from '../api/employers';
-import { Approval, getApprovals, getApprovalQuotaDetails } from '../api/approvals';
+import { Approval, expandQuotaSeqRange, getApprovals, getApprovalQuotaDetails } from '../api/approvals';
 import { Worker, getWorkers } from '../api/workers';
 import { getAuthIdentity, isSuperAdmin } from '../utils/authRole';
 import { appendGlobalAuditLog, GlobalAuditLog } from '../utils/auditLog';
@@ -666,13 +666,21 @@ const QuotaApplications: React.FC = () => {
   }, [form.renew_old_file_no, renewOldApprovalOptions]);
   const renewOldApprovalQuotaOptions = useMemo(() => {
     if (!renewSelectedApprovalId) return [] as Array<{ seq: string; job_title: string; work_location: string }>;
-    return getApprovalQuotaDetails(renewSelectedApprovalId)
-      .map((q) => ({
-        seq: normalizeSeq4OrEmpty((q as any).quota_seq),
-        job_title: String((q as any).job_title || '').trim(),
-        work_location: String((q as any).work_location || '').trim(),
-      }))
-      .filter((x) => Boolean(x.seq));
+    const expanded = getApprovalQuotaDetails(renewSelectedApprovalId).flatMap((q) => {
+      const job_title = String((q as any).job_title || '').trim();
+      const work_location = String((q as any).work_location || '').trim();
+      const seqs = expandQuotaSeqRange(q as any);
+      if (seqs.length > 0) {
+        return seqs.map((seq) => ({ seq, job_title, work_location }));
+      }
+      const single = normalizeSeq4OrEmpty((q as any).quota_seq);
+      return single ? [{ seq: single, job_title, work_location }] : [];
+    });
+    const map = new Map<string, { seq: string; job_title: string; work_location: string }>();
+    for (const item of expanded) {
+      if (!map.has(item.seq)) map.set(item.seq, item);
+    }
+    return Array.from(map.values()).sort((a, b) => a.seq.localeCompare(b.seq));
   }, [renewSelectedApprovalId]);
   const filteredRenewQuotaSeqOptions = useMemo(() => {
     const q = String(renewQuotaSeqQuery || '').trim();
