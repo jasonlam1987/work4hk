@@ -1437,7 +1437,14 @@ const Approvals: React.FC = () => {
                           {String(approval.approval_number || '?').charAt(0).toUpperCase()}
                         </div>
                         <div className="ml-4">
-                          <div className="text-sm font-medium text-gray-900">{String(approval.approval_number || '').toUpperCase()}</div>
+                          <div className="text-sm font-medium text-gray-900 flex items-center gap-2">
+                            <span>{String(approval.approval_number || '').toUpperCase()}</span>
+                            {!!(approval as any).__localOnly && (
+                              <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-800 border border-amber-200">
+                                本機暫存
+                              </span>
+                            )}
+                          </div>
                           <div className="text-sm text-gray-500">{approval.department || '-'}</div>
                         </div>
                       </div>

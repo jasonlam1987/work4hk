@@ -296,20 +296,15 @@ export const getApprovals = async (params?: { q?: string; limit?: number; offset
         quota_quantity: quotaQuantity,
       } as Approval;
     });
-    if (!ENABLE_MOCK_APPROVALS) {
-      const q = (cleanedParams.q || '').toLowerCase();
-      if (!q) return serverList;
-      return serverList.filter(a => String(a.approval_number || '').toLowerCase().includes(q));
-    }
-
-    const mockList = readMockApprovals();
-
+ 
+    const mockList = readMockApprovals().filter((x: any) => !!x?.__localOnly);
+ 
     const serverKeys = new Set(
       serverList
         .map(a => String(a.approval_number || '').trim().toLowerCase())
         .filter(Boolean)
     );
-
+ 
     const merged = [...serverList];
     for (const m of mockList) {
       const key = String(m.approval_number || '').trim().toLowerCase();
@@ -317,7 +312,7 @@ export const getApprovals = async (params?: { q?: string; limit?: number; offset
       if (serverKeys.has(key)) continue;
       merged.push(m);
     }
-
+ 
     const q = (cleanedParams.q || '').toLowerCase();
     if (!q) return merged;
     return merged.filter(a => (String(a.approval_number || '').toLowerCase().includes(q)));
@@ -406,7 +401,7 @@ export const createApproval = async (data: ApprovalCreate) => {
       }
     }
 
-    if (!shouldFallbackToMock(err, true)) throw err;
+    if (!shouldFallbackToMock(err, false)) throw err;
     return buildMock();
   }
 };
@@ -435,6 +430,26 @@ export const updateApproval = async (id: number, data: Partial<ApprovalCreate>) 
   } catch (err: any) {
     const status = err?.response?.status as number | undefined;
 
+    if (status === 404 || status === 500) {
+      const list = readMockApprovals();
+      const idx = list.findIndex(a => a.id === id);
+      if (idx >= 0) {
+        const base = list[idx];
+        const updated: Approval = { ...base, ...(nextData as any) };
+        const next = [...list];
+        next[idx] = updated;
+        writeMockApprovals(next);
+        appendGlobalAuditLog({
+          module: 'approvals',
+          action: 'update',
+          record_id: String(id),
+          record_no: String(updated?.approval_number || ''),
+          details: `更新批文（本機暫存）：${updated?.approval_number || id}`,
+        });
+        return updated;
+      }
+    }
+ 
     if (!ENABLE_MOCK_APPROVALS) throw err;
 
     if (status === 404) {
@@ -499,6 +514,23 @@ export const deleteApproval = async (id: number) => {
   } catch (err: any) {
     const status = err?.response?.status as number | undefined;
 
+    if (status === 404 || status === 500) {
+      const list = readMockApprovals();
+      const idx = list.findIndex(a => a.id === id);
+      if (idx >= 0) {
+        const next = list.filter(a => a.id !== id);
+        writeMockApprovals(next);
+        clearApprovalQuotaDetails(id);
+        appendGlobalAuditLog({
+          module: 'approvals',
+          action: 'delete',
+          record_id: String(id),
+          details: `刪除批文（本機暫存） id=${id}`,
+        });
+        return { ok: true, localOnly: true };
+      }
+    }
+ 
     if (!ENABLE_MOCK_APPROVALS) throw err;
 
     // 後端回 404 代表資料已不存在：視為刪除成功，並同步清理本機 mock（避免畫面殘留）
