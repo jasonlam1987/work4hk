@@ -26,7 +26,9 @@ import {
   filterLabourCompanies,
   readLabourCompanies,
   updateLabourCompany,
+  writeLabourCompanies,
 } from '../utils/labourCompanies';
+import { deleteLabourCompanyRemote, getLabourCompaniesRemote, setLabourCompaniesRemote } from '../api/labourCompanies';
 import Users, { UsersHandle } from './Users';
 import { getAuthIdentity } from '../utils/authRole';
 import { GlobalAuditLog, readGlobalAuditLogs } from '../utils/auditLog';
@@ -331,11 +333,23 @@ const Settings: React.FC = () => {
     if (activeTab === 'labour_companies') {
       setLoading(true);
       setError('');
+      const localList = readLabourCompanies();
       try {
-        const list = readLabourCompanies();
-        setLabourCompanies(filterLabourCompanies(list, search));
+        const remoteList = await getLabourCompaniesRemote();
+        if (Array.isArray(remoteList)) {
+          if (remoteList.length === 0 && localList.length > 0) {
+            const seeded = await setLabourCompaniesRemote(localList);
+            writeLabourCompanies(seeded);
+            setLabourCompanies(filterLabourCompanies(seeded, search));
+            return;
+          }
+          writeLabourCompanies(remoteList);
+          setLabourCompanies(filterLabourCompanies(remoteList, search));
+          return;
+        }
+        setLabourCompanies(filterLabourCompanies(localList, search));
       } catch {
-        setLabourCompanies([]);
+        setLabourCompanies(filterLabourCompanies(localList, search));
         setError('讀取勞務公司資料失敗');
       } finally {
         setLoading(false);
@@ -476,6 +490,15 @@ const Settings: React.FC = () => {
         }
         if (isEditing && selectedLabourCompanyId) updateLabourCompany(selectedLabourCompanyId, payload);
         else createLabourCompany(payload);
+        const localNext = readLabourCompanies();
+        try {
+          const remoteNext = await setLabourCompaniesRemote(localNext);
+          writeLabourCompanies(remoteNext);
+        } catch (err: any) {
+          const detail = err?.response?.data?.detail;
+          alert(typeof detail === 'string' ? detail : err?.message || '同步到伺服器失敗');
+          return;
+        }
         setIsModalOpen(false);
         fetchData();
         return;
@@ -500,9 +523,20 @@ const Settings: React.FC = () => {
     fetchData();
   };
 
-  const handleDeleteLabourCompany = (id: string) => {
+  const handleDeleteLabourCompany = async (id: string) => {
     const ok = window.confirm('確定要刪除此勞務公司資料嗎？');
     if (!ok) return;
+    setSaving(true);
+    try {
+      const remoteNext = await deleteLabourCompanyRemote(id);
+      writeLabourCompanies(remoteNext);
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      alert(typeof detail === 'string' ? detail : err?.message || '同步刪除到伺服器失敗');
+      return;
+    } finally {
+      setSaving(false);
+    }
     deleteLabourCompany(id);
     fetchData();
   };

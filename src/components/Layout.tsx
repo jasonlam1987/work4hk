@@ -29,8 +29,11 @@ import { subscribeDeleteNotice } from '../utils/deleteNotifications';
 import { getDisplayVersion } from '../utils/version';
 import { countFinancePendingByWorkers, readFinanceRecords, writeFinanceRecords } from '../utils/financeRecords';
 import { getFinanceRecordsRemote } from '../api/financeRecords';
+import { getLabourCompaniesRemote } from '../api/labourCompanies';
+import { writeLabourCompanies } from '../utils/labourCompanies';
 
 let lastFinanceSyncAt = 0;
+let lastLabourCompaniesSyncAt = 0;
 
 type PendingPreviewItem = {
   id: string;
@@ -90,6 +93,13 @@ const Layout: React.FC = () => {
           financeRecords = remote;
           writeFinanceRecords(remote);
           lastFinanceSyncAt = now;
+        }
+      }
+      if (now - lastLabourCompaniesSyncAt > 15000) {
+        const remote = await getLabourCompaniesRemote().catch(() => null);
+        if (Array.isArray(remote)) {
+          writeLabourCompanies(remote);
+          lastLabourCompaniesSyncAt = now;
         }
       }
       setPendingFinanceCount(countFinancePendingByWorkers(workers || [], financeRecords));
