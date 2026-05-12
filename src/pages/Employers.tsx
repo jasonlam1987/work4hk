@@ -670,7 +670,8 @@ const Employers: React.FC = () => {
     if (!deleteTarget) return;
 
     const targetId = deleteTarget.id;
-    if (!superAdmin) {
+    const canHardDelete = superAdmin || authIdentity.roleKey === 'admin';
+    if (!canHardDelete) {
       const reason = String(deleteReason || '').trim();
       if (!reason) {
         alert('請填寫刪除理由');
