@@ -1203,6 +1203,34 @@ const Approvals: React.FC = () => {
       }));
   };
 
+  const serializeQuotaRowsForApi = (): QuotaDetail[] => {
+    return quotaDetails
+      .filter((r) => !r._deleted)
+      .flatMap((r) => {
+        const start = normalizeSeq4(String(r.quota_seq_start || ''));
+        const end = normalizeSeq4(String(r.quota_seq_end || ''));
+        const expanded = expandQuotaSeqRange({ quota_seq_start: start, quota_seq_end: end, quota_seq: start });
+        const locs = [
+          String(r.work_location_1 || '').trim(),
+          String(r.work_location_2 || '').trim(),
+          String(r.work_location_3 || '').trim(),
+        ].filter(Boolean).slice(0, 3);
+        const work_location = locs.join('|') || String(r.work_location_1 || '').trim();
+        const job_title = String(r.job_title || '').trim();
+        const monthly_salary = Number(formatSalary(r.monthly_salary));
+        const work_hours = composeWeeklyDaily(r.work_days_per_week, r.work_hours_per_day);
+        const employment_months = Number(String(r.employment_months || '').replace(/[^\d]/g, ''));
+        return (expanded.length ? expanded : [start]).filter(Boolean).map((seq) => ({
+          quota_seq: String(seq),
+          work_location,
+          job_title,
+          monthly_salary,
+          work_hours,
+          employment_months,
+        })) as QuotaDetail[];
+      });
+  };
+
   const updateQuotaRow = (
     idx: number,
     patch: Partial<QuotaDetailForm>,
@@ -1304,7 +1332,7 @@ const Approvals: React.FC = () => {
       signatory_name: String(formData.signatory_name || '').trim() || "",
       issue_date: toApiDate(issueDate),
       expiry_date: calcExpiryDate(issueDate),
-      quota_details: serializeQuotaRows(),
+      quota_details: serializeQuotaRowsForApi(),
     };
 
     setSaving(true);
