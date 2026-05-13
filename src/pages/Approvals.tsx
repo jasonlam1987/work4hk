@@ -1331,7 +1331,7 @@ const Approvals: React.FC = () => {
       department: dept || '勞工處',
       signatory_name: String(formData.signatory_name || '').trim() || "",
       issue_date: toApiDate(issueDate),
-      expiry_date: calcExpiryDate(issueDate),
+      expiry_date: toApiDate(calcExpiryDate(issueDate)),
       quota_details: serializeQuotaRowsForApi(),
     };
 
