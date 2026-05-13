@@ -1331,7 +1331,7 @@ const Approvals: React.FC = () => {
       department: dept || '勞工處',
       signatory_name: String(formData.signatory_name || '').trim() || "",
       issue_date: toApiDate(issueDate),
-      expiry_date: toApiDate(calcExpiryDate(issueDate)),
+      expiry_date: calcExpiryDate(issueDate),
       quota_details: serializeQuotaRowsForApi(),
     };
 
@@ -1348,6 +1348,9 @@ const Approvals: React.FC = () => {
           if (created?.id) {
             setApprovalQuotaDetails(Number(created.id), serializeQuotaRows());
             setQuotaMapVersion(v => v + 1);
+          }
+          if ((created as any)?.__localOnly) {
+            alert('後端暫時無法建立批文，已先暫存到本機（標記：本機暫存）。請稍後再嘗試刷新或重新儲存以同步。');
           }
           return created;
         }

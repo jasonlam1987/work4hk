@@ -340,7 +340,7 @@ export const createApproval = async (data: ApprovalCreate) => {
 
   const buildMock = () => {
     const list = readMockApprovals();
-    const nextId = list.length > 0 ? Math.max(...list.map(a => a.id || 0)) + 1 : 1;
+    const nextId = -1 * (Date.now() + Math.floor(Math.random() * 1000));
     const item: Approval = {
       id: nextId,
       employer_id: Number(normalizedPayload.employer_id),
@@ -401,7 +401,7 @@ export const createApproval = async (data: ApprovalCreate) => {
       }
     }
 
-    if (!shouldFallbackToMock(err, false)) throw err;
+    if (!shouldFallbackToMock(err, true)) throw err;
     return buildMock();
   }
 };
