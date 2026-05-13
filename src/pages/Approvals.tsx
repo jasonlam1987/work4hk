@@ -1156,9 +1156,10 @@ const Approvals: React.FC = () => {
     if (rows.length === 0) return { ok: false, message: '請至少新增一個配額數量' };
     const seqSet = new Set<string>();
     for (const r of rows) {
-      const start = normalizeSeq4(String(r.quota_seq_start || ''));
-      const end = normalizeSeq4(String(r.quota_seq_end || ''));
-      if (!start || !end) return { ok: false, message: '配額序號範圍為必填（4位數字）' };
+      const start = normalizeSeq4(String((r as any).quota_seq_start || (r as any).quota_seq || ''));
+      const endRaw = normalizeSeq4(String(r.quota_seq_end || ''));
+      const end = endRaw || start;
+      if (!start) return { ok: false, message: '配額序號為必填（4位數字）' };
       if (Number(start) > Number(end)) return { ok: false, message: `配額序號範圍無效：${start}-${end}` };
       const expanded = expandQuotaSeqRange({ quota_seq_start: start, quota_seq_end: end, quota_seq: start });
       if (expanded.length === 0) return { ok: false, message: `配額序號範圍無效：${start}-${end}` };
@@ -1186,10 +1187,13 @@ const Approvals: React.FC = () => {
   const serializeQuotaRows = (): QuotaDetail[] => {
     return quotaDetails
       .filter(r => !r._deleted)
-      .map((r) => ({
-        quota_seq: normalizeSeq4(String(r.quota_seq_start || '')),
-        quota_seq_start: normalizeSeq4(String(r.quota_seq_start || '')),
-        quota_seq_end: normalizeSeq4(String(r.quota_seq_end || '')),
+      .map((r) => {
+        const start = normalizeSeq4(String((r as any).quota_seq_start || (r as any).quota_seq || ''));
+        const end = normalizeSeq4(String(r.quota_seq_end || '')) || start;
+        return ({
+        quota_seq: start,
+        quota_seq_start: start,
+        quota_seq_end: end,
         work_location: String(r.work_location_1 || '').trim(),
         work_locations: [
           String(r.work_location_1 || '').trim(),
@@ -1200,15 +1204,16 @@ const Approvals: React.FC = () => {
         monthly_salary: Number(formatSalary(r.monthly_salary)),
         work_hours: composeWeeklyDaily(r.work_days_per_week, r.work_hours_per_day),
         employment_months: Number(String(r.employment_months || '').replace(/[^\d]/g, '')),
-      }));
+      })});
   };
 
   const serializeQuotaRowsForApi = (): QuotaDetail[] => {
     return quotaDetails
       .filter((r) => !r._deleted)
       .flatMap((r) => {
-        const start = normalizeSeq4(String(r.quota_seq_start || ''));
-        const end = normalizeSeq4(String(r.quota_seq_end || ''));
+        const start = normalizeSeq4(String((r as any).quota_seq_start || (r as any).quota_seq || ''));
+        const endRaw = normalizeSeq4(String(r.quota_seq_end || ''));
+        const end = endRaw || start;
         const expanded = expandQuotaSeqRange({ quota_seq_start: start, quota_seq_end: end, quota_seq: start });
         const locs = [
           String(r.work_location_1 || '').trim(),
@@ -2298,7 +2303,7 @@ const Approvals: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">配額序號範圍（止）*</label>
+                      <label className="block text-xs text-gray-500 mb-1">配額序號範圍（止）</label>
                       <input
                         type="text"
                         value={row.quota_seq_end}
@@ -2309,12 +2314,11 @@ const Approvals: React.FC = () => {
                         onBlur={() => {
                           updateQuotaRow(idx, { quota_seq_end: row.quota_seq_end ? row.quota_seq_end.padStart(4, '0') : '' });
                         }}
-                        placeholder="0005"
+                        placeholder="0005（可留空）"
                         className="w-full px-3 py-2 border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/50"
-                        required
                       />
                       <div className="text-[11px] text-gray-500 mt-1">
-                        範圍：{normalizeSeq4(row.quota_seq_start || '') || '0000'} - {normalizeSeq4(row.quota_seq_end || '') || '0000'}
+                        範圍：{normalizeSeq4(row.quota_seq_start || '') || '0000'} - {normalizeSeq4(row.quota_seq_end || row.quota_seq_start || '') || '0000'}
                       </div>
                     </div>
                     <div>
