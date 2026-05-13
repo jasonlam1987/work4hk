@@ -1349,9 +1349,6 @@ const Approvals: React.FC = () => {
             setApprovalQuotaDetails(Number(created.id), serializeQuotaRows());
             setQuotaMapVersion(v => v + 1);
           }
-          if ((created as any)?.__localOnly) {
-            alert('後端暫時無法建立批文，已先暫存到本機（標記：本機暫存）。請稍後再嘗試刷新或重新儲存以同步。');
-          }
           return created;
         }
       };
@@ -1470,11 +1467,6 @@ const Approvals: React.FC = () => {
                         <div className="ml-4">
                           <div className="text-sm font-medium text-gray-900 flex items-center gap-2">
                             <span>{String(approval.approval_number || '').toUpperCase()}</span>
-                            {!!(approval as any).__localOnly && (
-                              <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-800 border border-amber-200">
-                                本機暫存
-                              </span>
-                            )}
                           </div>
                           <div className="text-sm text-gray-500">{approval.department || '-'}</div>
                         </div>

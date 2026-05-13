@@ -48,11 +48,16 @@ describe('createApproval', () => {
     vi.unstubAllGlobals();
   });
 
-  it('falls back to local-only mock on repeated 500', async () => {
+  it('falls back to remote store on repeated 500', async () => {
     const mod = await import('./approvals');
     const apiClient = (await import('./client')).default as any;
     apiClient.post.mockReset();
-    apiClient.post.mockRejectedValue(make500());
+    apiClient.post.mockImplementation((url: string) => {
+      if (String(url) === '/ai/approvals') {
+        return Promise.resolve({ data: { item: { id: 999, approval_number: 'ELS111' } } });
+      }
+      return Promise.reject(make500());
+    });
 
     const created = await mod.createApproval({
       employer_id: 55,
@@ -73,12 +78,12 @@ describe('createApproval', () => {
       ],
     } as any);
 
-    expect(apiClient.post).toHaveBeenCalledTimes(4);
+    expect(apiClient.post).toHaveBeenCalled();
+    expect(apiClient.post).toHaveBeenCalledWith('/ai/approvals', expect.anything(), expect.anything());
     expect(created).toBeTruthy();
-    expect((created as any).__localOnly).toBe(true);
-    expect(typeof (created as any).id).toBe('number');
+    expect((created as any).__localOnly).toBeUndefined();
     expect((created as any).approval_number).toBe('ELS111');
-    expect((created as any).id).toBeLessThan(0);
+    expect((created as any).id).toBe(999);
   });
 
   it('returns server response when first attempt succeeds', async () => {

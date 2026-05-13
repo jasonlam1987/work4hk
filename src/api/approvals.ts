@@ -1,5 +1,6 @@
 import apiClient from './client';
 import { appendGlobalAuditLog } from '../utils/auditLog';
+import { createApprovalRemote, getApprovalQuotaMapRemote, getApprovalsRemote, updateApprovalRemote, deleteApprovalRemote, setApprovalQuotaDetailsRemote } from './approvalsRemote';
 
 export interface Approval {
   id: number;
@@ -179,6 +180,10 @@ export const setApprovalQuotaDetails = (approvalId: number, details: QuotaDetail
     };
   });
   writeQuotaMap(map);
+  try {
+    void setApprovalQuotaDetailsRemote(approvalId, map[String(approvalId)] as any);
+  } catch {
+  }
 };
 
 const readVersionLogs = (): ApprovalVersionLog[] => {
@@ -268,9 +273,9 @@ const writeMockApprovals = (items: Approval[]) => {
   localStorage.setItem(MOCK_STORAGE_KEY, JSON.stringify(normalized));
 };
 
-const shouldFallbackToMock = (err: any, allowProd = false) => {
+const shouldFallbackToMock = (err: any) => {
   const status = err?.response?.status as number | undefined;
-  return status === 500 && (ENABLE_MOCK_APPROVALS || allowProd);
+  return status === 500 && ENABLE_MOCK_APPROVALS;
 };
 
 export const getApprovals = async (params?: { q?: string; limit?: number; offset?: number }) => {
@@ -297,7 +302,15 @@ export const getApprovals = async (params?: { q?: string; limit?: number; offset
       } as Approval;
     });
  
-    const mockList = readMockApprovals().filter((x: any) => !!x?.__localOnly);
+    const remoteList = await getApprovalsRemote().catch(() => []);
+    const remoteQuotaMap = await getApprovalQuotaMapRemote().catch(() => null);
+    if (remoteQuotaMap && typeof remoteQuotaMap === 'object') {
+      try {
+        localStorage.setItem(QUOTA_STORAGE_KEY, JSON.stringify(remoteQuotaMap));
+      } catch {
+      }
+    }
+    const mockList = remoteList.filter((x: any) => x && typeof x === 'object');
  
     const serverKeys = new Set(
       serverList
@@ -317,9 +330,14 @@ export const getApprovals = async (params?: { q?: string; limit?: number; offset
     if (!q) return merged;
     return merged.filter(a => (String(a.approval_number || '').toLowerCase().includes(q)));
   } catch (err: any) {
-    if (!shouldFallbackToMock(err, true)) throw err;
-
-    const list = readMockApprovals();
+    const list = await getApprovalsRemote().catch(() => []);
+    const remoteQuotaMap = await getApprovalQuotaMapRemote().catch(() => null);
+    if (remoteQuotaMap && typeof remoteQuotaMap === 'object') {
+      try {
+        localStorage.setItem(QUOTA_STORAGE_KEY, JSON.stringify(remoteQuotaMap));
+      } catch {
+      }
+    }
     const q = (cleanedParams.q || '').toLowerCase();
     const filtered = q
       ? list.filter(a => (a.approval_number || '').toLowerCase().includes(q))
@@ -336,25 +354,6 @@ export const createApproval = async (data: ApprovalCreate) => {
     department: DEPARTMENT_OPTIONS.includes(normalizedDepartment as any) ? normalizedDepartment : '勞工處',
     issue_date: normalizedIssue || undefined,
     expiry_date: normalizedIssue ? calcExpiryDate(normalizedIssue) : undefined,
-  };
-
-  const buildMock = () => {
-    const list = readMockApprovals();
-    const nextId = -1 * (Date.now() + Math.floor(Math.random() * 1000));
-    const item: Approval = {
-      id: nextId,
-      employer_id: Number(normalizedPayload.employer_id),
-      partner_id: Number(normalizedPayload.partner_id),
-      approval_number: String(normalizedPayload.approval_number || ''),
-      department: normalizedPayload.department as any,
-      issue_date: normalizedPayload.issue_date as any,
-      expiry_date: normalizedPayload.expiry_date as any,
-      signatory_name: normalizedPayload.signatory_name as any,
-      __localOnly: true,
-    };
-    const next = [item, ...list];
-    writeMockApprovals(next);
-    return item;
   };
 
   try {
@@ -400,9 +399,7 @@ export const createApproval = async (data: ApprovalCreate) => {
         if (s !== 500) throw e;
       }
     }
-
-    if (!shouldFallbackToMock(err, true)) throw err;
-    return buildMock();
+    return await createApprovalRemote(normalizedPayload);
   }
 };
 
@@ -429,74 +426,18 @@ export const updateApproval = async (id: number, data: Partial<ApprovalCreate>) 
     return response.data;
   } catch (err: any) {
     const status = err?.response?.status as number | undefined;
-
     if (status === 404 || status === 500) {
-      const list = readMockApprovals();
-      const idx = list.findIndex(a => a.id === id);
-      if (idx >= 0) {
-        const base = list[idx];
-        const updated: Approval = { ...base, ...(nextData as any) };
-        const next = [...list];
-        next[idx] = updated;
-        writeMockApprovals(next);
-        appendGlobalAuditLog({
-          module: 'approvals',
-          action: 'update',
-          record_id: String(id),
-          record_no: String(updated?.approval_number || ''),
-          details: `更新批文（本機暫存）：${updated?.approval_number || id}`,
-        });
-        return updated;
-      }
-    }
- 
-    if (!ENABLE_MOCK_APPROVALS) throw err;
-
-    if (status === 404) {
-      const list = readMockApprovals();
-      const idx = list.findIndex(a => a.id === id);
-
-      const base: Approval =
-        idx >= 0
-          ? list[idx]
-          : {
-              id,
-              employer_id: Number((nextData as any)?.employer_id || 0),
-              partner_id: Number((nextData as any)?.partner_id || 0),
-              approval_number: String((nextData as any)?.approval_number || ''),
-            };
-
-      const updated: Approval = { ...base, ...(nextData as any) };
-      const next = idx >= 0 ? [...list] : [updated, ...list];
-      if (idx >= 0) next[idx] = updated;
-      writeMockApprovals(next);
+      const updated = await updateApprovalRemote(id, nextData as any);
       appendGlobalAuditLog({
         module: 'approvals',
         action: 'update',
         record_id: String(id),
         record_no: String(updated?.approval_number || ''),
-        details: `更新批文（本機mock）：${updated?.approval_number || id}`,
+        details: `更新批文：${updated?.approval_number || id}`,
       });
       return updated;
     }
-
-    if (!shouldFallbackToMock(err)) throw err;
-
-    const list = readMockApprovals();
-    const idx = list.findIndex(a => a.id === id);
-    if (idx === -1) throw err;
-    const updated: Approval = { ...list[idx], ...(nextData as any) };
-    const next = [...list];
-    next[idx] = updated;
-    writeMockApprovals(next);
-    appendGlobalAuditLog({
-      module: 'approvals',
-      action: 'update',
-      record_id: String(id),
-      record_no: String(updated?.approval_number || ''),
-      details: `更新批文（回退）：${updated?.approval_number || id}`,
-    });
-    return updated;
+    throw err;
   }
 };
 
@@ -513,53 +454,17 @@ export const deleteApproval = async (id: number) => {
     return response.data;
   } catch (err: any) {
     const status = err?.response?.status as number | undefined;
-
     if (status === 404 || status === 500) {
-      const list = readMockApprovals();
-      const idx = list.findIndex(a => a.id === id);
-      if (idx >= 0) {
-        const next = list.filter(a => a.id !== id);
-        writeMockApprovals(next);
-        clearApprovalQuotaDetails(id);
-        appendGlobalAuditLog({
-          module: 'approvals',
-          action: 'delete',
-          record_id: String(id),
-          details: `刪除批文（本機暫存） id=${id}`,
-        });
-        return { ok: true, localOnly: true };
-      }
-    }
- 
-    if (!ENABLE_MOCK_APPROVALS) throw err;
-
-    // 後端回 404 代表資料已不存在：視為刪除成功，並同步清理本機 mock（避免畫面殘留）
-    if (status === 404) {
-      const list = readMockApprovals();
-      const next = list.filter(a => a.id !== id);
-      writeMockApprovals(next);
+      await deleteApprovalRemote(id);
       clearApprovalQuotaDetails(id);
       appendGlobalAuditLog({
         module: 'approvals',
         action: 'delete',
         record_id: String(id),
-        details: `刪除批文（已不存在，視作成功） id=${id}`,
+        details: `刪除批文 id=${id}`,
       });
-      return { ok: true, alreadyDeleted: true };
+      return { ok: true, remote: true };
     }
-
-    if (!shouldFallbackToMock(err)) throw err;
-
-    const list = readMockApprovals();
-    const next = list.filter(a => a.id !== id);
-    writeMockApprovals(next);
-    clearApprovalQuotaDetails(id);
-    appendGlobalAuditLog({
-      module: 'approvals',
-      action: 'delete',
-      record_id: String(id),
-      details: `刪除批文（回退） id=${id}`,
-    });
-    return { ok: true };
+    throw err;
   }
 };
