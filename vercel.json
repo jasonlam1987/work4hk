@@ -7,7 +7,7 @@
     { "source": "/api/auth/check-user-unique", "destination": "/api/auth/check-user-unique" },
     { "source": "/api/auth/resolve-login-identity", "destination": "/api/auth/resolve-login-identity" },
     { "source": "/api/auth/change-password", "destination": "/api/auth/change-password" },
-    { "source": "/api/(.*)", "destination": "/api/$1" },
+    { "source": "/api/(.*)", "destination": "/api/proxy/$1" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }

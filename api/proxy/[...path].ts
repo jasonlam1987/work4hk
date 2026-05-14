@@ -1,4 +1,4 @@
-import { buildUpstreamHeaders, readRequestBodyIfAny, upstreamFetch } from './_upstream';
+import { buildUpstreamHeaders, readRequestBodyIfAny, upstreamFetch } from '../_upstream';
 
 const json = (res: any, status: number, body: any) => {
   res.statusCode = status;
@@ -17,8 +17,17 @@ const hopByHopHeaders = new Set([
   'upgrade',
 ]);
 
+const stripProxyPrefix = (url: string) => {
+  const u = String(url || '/');
+  if (u.startsWith('/api/proxy/')) return `/api/${u.slice('/api/proxy/'.length)}`;
+  if (u === '/api/proxy') return '/api';
+  if (u.startsWith('/proxy/')) return `/${u.slice('/proxy/'.length)}`;
+  if (u === '/proxy') return '/';
+  return u;
+};
+
 export default async function handler(req: any, res: any) {
-  const upstreamUrl = String(req.url || '/');
+  const upstreamUrl = stripProxyPrefix(String(req.url || '/'));
   const method = String(req.method || 'GET').toUpperCase();
 
   try {
