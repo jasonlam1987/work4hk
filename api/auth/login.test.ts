@@ -89,5 +89,40 @@ describe('auth login API', () => {
     expect(body.code).toBe('AUTH_INVALID');
     expect(body.error).toBe('帳號或密碼錯誤');
   });
-});
 
+  it('maps jwt token to access_token', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ jwt: 'token-j', user: { id: 1 } }),
+      })) as any
+    );
+    const req = makeReq({ username: 'admin', password: 'Passw0rd!' });
+    const res = makeRes();
+    await loginHandler(req, res);
+    const body = JSON.parse(String(res.state.body || '{}'));
+    expect(res.statusCode).toBe(200);
+    expect(body.access_token).toBe('token-j');
+    expect(body.user?.id).toBe(1);
+  });
+
+  it('returns 502 when upstream is unavailable', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status: 404,
+        text: async () => '<html>not found</html>',
+      })) as any
+    );
+    const req = makeReq({ username: 'admin', password: 'Passw0rd!' });
+    const res = makeRes();
+    await loginHandler(req, res);
+    const body = JSON.parse(String(res.state.body || '{}'));
+    expect(res.statusCode).toBe(502);
+    expect(body.code).toBe('AUTH_UPSTREAM_UNAVAILABLE');
+    expect(body.upstream_status).toBe(404);
+  });
+});
