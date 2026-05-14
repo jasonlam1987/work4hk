@@ -1,14 +1,11 @@
 {
-  "rewrites": [
-    { "source": "/api/ai/(.*)", "destination": "/api/ai/$1" },
-    { "source": "/api/wechat/(.*)", "destination": "/api/wechat/$1" },
-    { "source": "/api/auth/check-username", "destination": "/api/auth/check-username" },
-    { "source": "/api/auth/login", "destination": "/api/auth/login" },
-    { "source": "/api/auth/check-user-unique", "destination": "/api/auth/check-user-unique" },
-    { "source": "/api/auth/resolve-login-identity", "destination": "/api/auth/resolve-login-identity" },
-    { "source": "/api/auth/change-password", "destination": "/api/auth/change-password" },
-    { "source": "/api/proxy/(.*)", "destination": "/api/proxy/$1" },
-    { "source": "/api/(.*)", "destination": "/api/proxy/$1" },
-    { "source": "/(.*)", "destination": "/index.html" }
+  "routes": [
+    { "src": "/api/ai/(.*)", "dest": "/api/ai/$1" },
+    { "src": "/api/wechat/(.*)", "dest": "/api/wechat/$1" },
+    { "src": "/api/auth/(check-username|login|check-user-unique|resolve-login-identity|change-password)", "dest": "/api/auth/$1" },
+    { "src": "/api/proxy/(.*)", "dest": "/api/proxy/$1" },
+    { "src": "/api/(.*)", "dest": "/api/proxy/$1" },
+    { "handle": "filesystem" },
+    { "src": "/(.*)", "dest": "/index.html" }
   ]
 }
