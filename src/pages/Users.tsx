@@ -337,9 +337,9 @@ const Users = React.forwardRef<UsersHandle, UsersProps>(({ embedded, showCreateB
       alert('新密碼與確認密碼不一致');
       return;
     }
-    const strong = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/;
+    const strong = /^(?=.*[a-z])(?=.*\d).{8,}$/;
     if (!strong.test(newPassword)) {
-      alert('新密碼需至少 8 碼，且包含大小寫字母、數字與特殊字元');
+      alert('新密碼需至少 8 碼，且包含字母與數字');
       return;
     }
     setSaving(true);
@@ -357,7 +357,7 @@ const Users = React.forwardRef<UsersHandle, UsersProps>(({ embedded, showCreateB
       if (message.includes('OLD_PASSWORD_INVALID')) {
         alert('舊密碼驗證失敗，請重新輸入');
       } else if (message.includes('WEAK_PASSWORD')) {
-        alert('新密碼強度不足，需包含大小寫字母、數字與特殊字元');
+        alert('新密碼強度不足，需至少 8 碼且包含字母與數字');
       } else {
         alert('修改密碼失敗');
       }

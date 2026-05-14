@@ -9,10 +9,8 @@ const DEFAULT_LIMIT = 2000;
 
 const isStrongPassword = (v: string) => {
   if (v.length < 8) return false;
-  if (!/[A-Z]/.test(v)) return false;
   if (!/[a-z]/.test(v)) return false;
   if (!/\d/.test(v)) return false;
-  if (!/[^A-Za-z0-9]/.test(v)) return false;
   return true;
 };
 
