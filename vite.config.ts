@@ -383,15 +383,13 @@ export default defineConfig(({ mode }) => {
     process.env.WECHAT_APPSECRET = env.WECHAT_APPSECRET;
   }
 
-  const backendOrigin = String(env.BACKEND_ORIGIN || process.env.BACKEND_ORIGIN || 'http://119.91.50.192').trim()
-
   return {
   server: {
     port: 5176,
     strictPort: false,
     proxy: {
       '/api': {
-        target: backendOrigin,
+        target: 'http://119.91.50.192',
         changeOrigin: true,
         bypass: (req) => {
           if (req.url?.startsWith('/api/ai/') || req.url?.startsWith('/api/wechat/') || req.url?.startsWith('/api/auth/check-username') || req.url?.startsWith('/api/auth/login') || req.url?.startsWith('/api/auth/check-user-unique') || req.url?.startsWith('/api/auth/resolve-login-identity') || req.url?.startsWith('/api/auth/change-password')) return req.url

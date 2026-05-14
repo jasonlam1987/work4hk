@@ -4,41 +4,11 @@ const json = (res: any, status: number, body: any) => {
   res.end(JSON.stringify(body));
 };
 
-const BACKEND_ORIGIN = String(process.env.BACKEND_ORIGIN || 'http://119.91.50.192').trim();
+const BACKEND_ORIGIN = 'http://119.91.50.192';
 const DEFAULT_LIMIT = 2000;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const normalize = (v: any) => String(v || '').trim().toLowerCase();
-
-const safeJsonParse = (text: string) => {
-  try {
-    return text ? JSON.parse(text) : null;
-  } catch {
-    return null;
-  }
-};
-
-const pickToken = (data: any): string => {
-  const token =
-    data?.access_token ||
-    data?.token ||
-    data?.accessToken ||
-    data?.jwt ||
-    data?.data?.access_token ||
-    data?.data?.token ||
-    data?.data?.accessToken ||
-    data?.data?.jwt ||
-    '';
-  return String(token || '').trim();
-};
-
-const normalizeLoginResponse = (data: any) => {
-  const token = pickToken(data);
-  if (!token) return null;
-  if (data?.access_token) return data;
-  const user = data?.user || data?.data?.user;
-  return user ? { access_token: token, user } : { access_token: token };
-};
 
 const readBody = async (req: any) => {
   if (req.body && typeof req.body === 'object') return req.body;
@@ -55,27 +25,20 @@ const readBody = async (req: any) => {
   }
 };
 
-const loginUpstream = async (identifier: string, password: string) => {
-  const paths = ['/api/auth/login', '/api/auth/local', '/auth/login'];
-  const body = { username: identifier, identifier, email: identifier, password };
-
-  let last: any = null;
-  for (const p of paths) {
-    const resp = await fetch(`${BACKEND_ORIGIN}${p}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const text = await resp.text();
-    const data = safeJsonParse(text);
-    const normalized = normalizeLoginResponse(data);
-    last = { ok: resp.ok, status: resp.status, data, text };
-    if (resp.ok && normalized) return { ok: true, status: resp.status, data: normalized, text };
-    if (resp.ok && data) return { ok: true, status: resp.status, data, text };
-    if (resp.status === 400 || resp.status === 401 || resp.status === 403) return last;
+const loginWithUsername = async (username: string, password: string) => {
+  const resp = await fetch(`${BACKEND_ORIGIN}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  const text = await resp.text();
+  let data: any = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = null;
   }
-
-  return last || { ok: false, status: 0, data: null, text: '' };
+  return { ok: resp.ok, status: resp.status, data, text };
 };
 
 const resolveUsernameByEmail = async (email: string, token: string) => {
@@ -108,8 +71,8 @@ export default async function handler(req: any, res: any) {
   if (!identifier || !password) return json(res, 401, { code: 'AUTH_INVALID', error: '帳號或密碼錯誤' });
 
   try {
-    const direct = await loginUpstream(identifier, password);
-    if (direct.ok && pickToken(direct.data)) return json(res, 200, direct.data);
+    const direct = await loginWithUsername(identifier, password);
+    if (direct.ok && direct.data?.access_token) return json(res, 200, direct.data);
 
     const maybeEmail = EMAIL_RE.test(identifier);
     const precheckToken =
@@ -120,23 +83,14 @@ export default async function handler(req: any, res: any) {
     if (maybeEmail && precheckToken) {
       const resolvedUsername = await resolveUsernameByEmail(identifier, precheckToken);
       if (resolvedUsername) {
-        const retry = await loginUpstream(resolvedUsername, password);
-        if (retry.ok && pickToken(retry.data)) return json(res, 200, retry.data);
+        const retry = await loginWithUsername(resolvedUsername, password);
+        if (retry.ok && retry.data?.access_token) return json(res, 200, retry.data);
       }
-    }
-
-    const upstreamStatus = Number(direct?.status || 0);
-    const looksLikeUpstreamUnavailable = upstreamStatus === 404 || upstreamStatus >= 500 || upstreamStatus === 0;
-    if (looksLikeUpstreamUnavailable) {
-      return json(res, 502, {
-        code: 'AUTH_UPSTREAM_UNAVAILABLE',
-        error: '登入服務暫時不可用，請稍後再試',
-        upstream_status: upstreamStatus || undefined,
-      });
     }
 
     return json(res, 401, { code: 'AUTH_INVALID', error: '帳號或密碼錯誤' });
   } catch {
-    return json(res, 502, { code: 'AUTH_UPSTREAM_UNAVAILABLE', error: '登入服務暫時不可用，請稍後再試' });
+    return json(res, 401, { code: 'AUTH_INVALID', error: '帳號或密碼錯誤' });
   }
 }
+
