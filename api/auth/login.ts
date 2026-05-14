@@ -4,11 +4,25 @@ const json = (res: any, status: number, body: any) => {
   res.end(JSON.stringify(body));
 };
 
-const BACKEND_ORIGIN = 'http://119.91.50.192';
 const DEFAULT_LIMIT = 2000;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const normalize = (v: any) => String(v || '').trim().toLowerCase();
+
+const safeJsonParse = (text: string) => {
+  try {
+    return text ? JSON.parse(text) : null;
+  } catch {
+    return null;
+  }
+};
+
+const getBackendOrigin = () => {
+  const raw = String(process.env.BACKEND_ORIGIN || 'https://119.91.50.192').trim();
+  return raw.endsWith('/') ? raw.slice(0, -1) : raw;
+};
+
+const getBackendHost = () => String(process.env.BACKEND_HOST || '').trim();
 
 const readBody = async (req: any) => {
   if (req.body && typeof req.body === 'object') return req.body;
@@ -26,38 +40,38 @@ const readBody = async (req: any) => {
 };
 
 const loginWithUsername = async (username: string, password: string) => {
-  const resp = await fetch(`${BACKEND_ORIGIN}/api/auth/login`, {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json' };
+  const backendHost = getBackendHost();
+  if (backendHost) headers.Host = backendHost;
+
+  const resp = await fetch(`${getBackendOrigin()}/api/auth/login`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({ username, password }),
   });
   const text = await resp.text();
-  let data: any = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    data = null;
-  }
+  const data: any = safeJsonParse(text);
   return { ok: resp.ok, status: resp.status, data, text };
 };
 
 const resolveUsernameByEmail = async (email: string, token: string) => {
-  const url = new URL(`${BACKEND_ORIGIN}/api/users`);
+  const url = new URL(`${getBackendOrigin()}/api/users`);
   url.searchParams.set('limit', String(DEFAULT_LIMIT));
+  const headers: Record<string, string> = {
+    Authorization: token.toLowerCase().startsWith('bearer ') ? token : `Bearer ${token}`,
+    Accept: 'application/json',
+  };
+  const backendHost = getBackendHost();
+  if (backendHost) headers.Host = backendHost;
+
   const resp = await fetch(url.toString(), {
     method: 'GET',
-    headers: {
-      Authorization: token.toLowerCase().startsWith('bearer ') ? token : `Bearer ${token}`,
-    },
+    headers,
   });
   const text = await resp.text();
   if (!resp.ok) return '';
-  let data: any = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    return '';
-  }
+  const data: any = safeJsonParse(text);
+  if (!data) return '';
   const list = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : [];
   const matched = list.find((u: any) => normalize(u?.email || u?.mail || '') === normalize(email));
   return String(matched?.username || '').trim();
@@ -88,9 +102,19 @@ export default async function handler(req: any, res: any) {
       }
     }
 
+    const upstreamStatus = Number(direct?.status || 0);
+    const looksLikeUpstreamUnavailable = upstreamStatus === 404 || upstreamStatus >= 500 || upstreamStatus === 0;
+    if (looksLikeUpstreamUnavailable) {
+      return json(res, 502, {
+        code: 'AUTH_UPSTREAM_UNAVAILABLE',
+        error: '登入服務暫時不可用，請稍後再試',
+        upstream_status: upstreamStatus || undefined,
+      });
+    }
+
     return json(res, 401, { code: 'AUTH_INVALID', error: '帳號或密碼錯誤' });
-  } catch {
-    return json(res, 401, { code: 'AUTH_INVALID', error: '帳號或密碼錯誤' });
+  } catch (e: any) {
+    return json(res, 502, { code: 'AUTH_UPSTREAM_UNAVAILABLE', error: '登入服務暫時不可用，請稍後再試' });
   }
 }
 

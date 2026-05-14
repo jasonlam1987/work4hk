@@ -4,7 +4,8 @@ const json = (res: any, status: number, body: any) => {
   res.end(JSON.stringify(body));
 };
 
-const BACKEND_ORIGIN = 'http://119.91.50.192';
+const BACKEND_ORIGIN = String(process.env.BACKEND_ORIGIN || 'https://119.91.50.192').trim();
+const BACKEND_HOST = String(process.env.BACKEND_HOST || '').trim();
 const DEFAULT_LIMIT = 2000;
 
 const isStrongPassword = (v: string) => {
@@ -44,11 +45,13 @@ export default async function handler(req: any, res: any) {
     const authToken = String(req.headers?.authorization || '').trim();
     if (!authToken) return json(res, 401, { error: 'UNAUTHORIZED' });
     const token = authToken.toLowerCase().startsWith('bearer ') ? authToken : `Bearer ${authToken}`;
+    const baseHeaders: Record<string, string> = { Accept: 'application/json' };
+    if (BACKEND_HOST) baseHeaders.Host = BACKEND_HOST;
 
     if (forceReset) {
       const meRes = await fetch(`${BACKEND_ORIGIN}/api/auth/me`, {
         method: 'GET',
-        headers: { Authorization: token },
+        headers: { ...baseHeaders, Authorization: token },
       });
       const me = await meRes.json().catch(() => null);
       const role = String(me?.role_key || me?.role || '').toLowerCase();
@@ -63,7 +66,7 @@ export default async function handler(req: any, res: any) {
       if (!oldPassword) return json(res, 400, { error: 'Missing required fields' });
       const loginRes = await fetch(`${BACKEND_ORIGIN}/api/auth/login`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...baseHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password: oldPassword }),
       });
       const loginData = await loginRes.json().catch(() => null);
@@ -72,7 +75,7 @@ export default async function handler(req: any, res: any) {
 
     const usersRes = await fetch(`${BACKEND_ORIGIN}/api/users?limit=${DEFAULT_LIMIT}`, {
       method: 'GET',
-      headers: { Authorization: token },
+      headers: { ...baseHeaders, Authorization: token },
     });
     const usersData = await usersRes.json().catch(() => null);
     if (!usersRes.ok) return json(res, 502, { error: 'FETCH_USERS_FAILED' });
@@ -83,6 +86,7 @@ export default async function handler(req: any, res: any) {
     const patchRes = await fetch(`${BACKEND_ORIGIN}/api/users/${target.id}`, {
       method: 'PATCH',
       headers: {
+        ...baseHeaders,
         'Content-Type': 'application/json',
         Authorization: token,
       },
