@@ -4,15 +4,8 @@ const json = (res: any, status: number, body: any) => {
   res.end(JSON.stringify(body))
 }
 
-const BACKEND_ORIGIN = String(process.env.BACKEND_ORIGIN || 'https://119.91.50.192').trim()
-const BACKEND_HOST = String(process.env.BACKEND_HOST || '').trim()
+const BACKEND_ORIGIN = 'http://119.91.50.192'
 const DEFAULT_LIMIT = 2000
-
-try {
-  const u = new URL(BACKEND_ORIGIN)
-  const isIpV4 = /^\d{1,3}(\.\d{1,3}){3}$/.test(String(u.hostname || ''))
-  if (u.protocol === 'https:' && isIpV4) process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
-} catch {}
 
 const readBody = async (req: any) => {
   if (req.body && typeof req.body === 'object') return req.body;
@@ -54,7 +47,6 @@ export default async function handler(req: any, res: any) {
       method: 'GET',
       headers: {
         Authorization: token.toLowerCase().startsWith('bearer ') ? token : `Bearer ${token}`,
-        ...(BACKEND_HOST ? { Host: BACKEND_HOST } : {}),
       },
     })
 

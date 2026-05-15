@@ -382,12 +382,6 @@ export default defineConfig(({ mode }) => {
   if (env.WECHAT_APPSECRET && !process.env.WECHAT_APPSECRET) {
     process.env.WECHAT_APPSECRET = env.WECHAT_APPSECRET;
   }
-  if (env.BACKEND_ORIGIN && !process.env.BACKEND_ORIGIN) {
-    process.env.BACKEND_ORIGIN = env.BACKEND_ORIGIN;
-  }
-  if (env.BACKEND_HOST && !process.env.BACKEND_HOST) {
-    process.env.BACKEND_HOST = env.BACKEND_HOST;
-  }
 
   return {
   server: {
@@ -395,11 +389,8 @@ export default defineConfig(({ mode }) => {
     strictPort: false,
     proxy: {
       '/api': {
-        target: String(env.BACKEND_ORIGIN || process.env.BACKEND_ORIGIN || 'http://119.91.50.192').trim(),
+        target: 'http://119.91.50.192',
         changeOrigin: true,
-        headers: String(env.BACKEND_HOST || process.env.BACKEND_HOST || '').trim()
-          ? { Host: String(env.BACKEND_HOST || process.env.BACKEND_HOST || '').trim() }
-          : undefined,
         bypass: (req) => {
           if (req.url?.startsWith('/api/ai/') || req.url?.startsWith('/api/wechat/') || req.url?.startsWith('/api/auth/check-username') || req.url?.startsWith('/api/auth/login') || req.url?.startsWith('/api/auth/check-user-unique') || req.url?.startsWith('/api/auth/resolve-login-identity') || req.url?.startsWith('/api/auth/change-password')) return req.url
           return undefined

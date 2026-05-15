@@ -4,36 +4,11 @@ const json = (res: any, status: number, body: any) => {
   res.end(JSON.stringify(body));
 };
 
+const BACKEND_ORIGIN = 'http://119.91.50.192';
 const DEFAULT_LIMIT = 2000;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const normalize = (v: any) => String(v || '').trim().toLowerCase();
-
-const safeJsonParse = (text: string) => {
-  try {
-    return text ? JSON.parse(text) : null;
-  } catch {
-    return null;
-  }
-};
-
-const getBackendOrigin = () => {
-  const raw = String(process.env.BACKEND_ORIGIN || 'https://119.91.50.192').trim();
-  return raw.endsWith('/') ? raw.slice(0, -1) : raw;
-};
-
-const getBackendHost = () => String(process.env.BACKEND_HOST || '').trim();
-
-const ensureTlsForOrigin = (origin: string) => {
-  try {
-    const u = new URL(origin);
-    const host = String(u.hostname || '');
-    const isIpV4 = /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
-    if (u.protocol === 'https:' && isIpV4) process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-  } catch {
-    return;
-  }
-};
 
 const readBody = async (req: any) => {
   if (req.body && typeof req.body === 'object') return req.body;
@@ -51,40 +26,38 @@ const readBody = async (req: any) => {
 };
 
 const loginWithUsername = async (username: string, password: string) => {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json' };
-  const backendHost = getBackendHost();
-  if (backendHost) headers.Host = backendHost;
-  const origin = getBackendOrigin();
-  ensureTlsForOrigin(origin);
-
-  const resp = await fetch(`${origin}/api/auth/login`, {
+  const resp = await fetch(`${BACKEND_ORIGIN}/api/auth/login`, {
     method: 'POST',
-    headers,
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password }),
   });
   const text = await resp.text();
-  const data: any = safeJsonParse(text);
+  let data: any = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = null;
+  }
   return { ok: resp.ok, status: resp.status, data, text };
 };
 
 const resolveUsernameByEmail = async (email: string, token: string) => {
-  const headers: Record<string, string> = {
-    Authorization: token.toLowerCase().startsWith('bearer ') ? token : `Bearer ${token}`,
-    Accept: 'application/json',
-  };
-  const backendHost = getBackendHost();
-  if (backendHost) headers.Host = backendHost;
-  const origin = getBackendOrigin();
-  ensureTlsForOrigin(origin);
-
-  const resp = await fetch(`${origin}/api/users?limit=${DEFAULT_LIMIT}`, {
+  const url = new URL(`${BACKEND_ORIGIN}/api/users`);
+  url.searchParams.set('limit', String(DEFAULT_LIMIT));
+  const resp = await fetch(url.toString(), {
     method: 'GET',
-    headers,
+    headers: {
+      Authorization: token.toLowerCase().startsWith('bearer ') ? token : `Bearer ${token}`,
+    },
   });
   const text = await resp.text();
   if (!resp.ok) return '';
-  const data: any = safeJsonParse(text);
-  if (!data) return '';
+  let data: any = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    return '';
+  }
   const list = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : [];
   const matched = list.find((u: any) => normalize(u?.email || u?.mail || '') === normalize(email));
   return String(matched?.username || '').trim();
@@ -115,23 +88,9 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    const upstreamStatus = Number(direct?.status || 0);
-    const looksLikeUpstreamUnavailable = upstreamStatus === 404 || upstreamStatus >= 500 || upstreamStatus === 0;
-    if (looksLikeUpstreamUnavailable) {
-      return json(res, 502, {
-        code: 'AUTH_UPSTREAM_UNAVAILABLE',
-        error: '登入服務暫時不可用，請稍後再試',
-        upstream_status: upstreamStatus || undefined,
-      });
-    }
-
     return json(res, 401, { code: 'AUTH_INVALID', error: '帳號或密碼錯誤' });
-  } catch (e: any) {
-    return json(res, 502, {
-      code: 'AUTH_UPSTREAM_UNAVAILABLE',
-      error: '登入服務暫時不可用，請稍後再試',
-      detail: String(e?.message || e),
-    });
+  } catch {
+    return json(res, 401, { code: 'AUTH_INVALID', error: '帳號或密碼錯誤' });
   }
 }
 
