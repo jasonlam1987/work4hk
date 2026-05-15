@@ -32,6 +32,7 @@ import { deleteLabourCompanyRemote, getLabourCompaniesRemote, setLabourCompanies
 import Users, { UsersHandle } from './Users';
 import { getAuthIdentity } from '../utils/authRole';
 import { GlobalAuditLog, readGlobalAuditLogs } from '../utils/auditLog';
+import { createAdminPasswordResetToken, setPasswordRotationEpoch } from '../api/passwordPolicy';
 
 type Tab = 'partners' | 'labour_companies' | 'authorized_parties' | 'users' | 'api_keys' | 'audit_logs';
 
@@ -133,6 +134,12 @@ const Settings: React.FC = () => {
   const [storageStatsError, setStorageStatsError] = useState('');
   const [bulkDownloading, setBulkDownloading] = useState(false);
   const [bulkDownloadProgress, setBulkDownloadProgress] = useState({ done: 0, total: 0 });
+  const [rotationSaving, setRotationSaving] = useState(false);
+  const [rotationResult, setRotationResult] = useState('');
+  const [resetTokenIdentifier, setResetTokenIdentifier] = useState('');
+  const [resetTokenResult, setResetTokenResult] = useState<{ token: string; expires_at: string } | null>(null);
+  const [resetTokenGenerating, setResetTokenGenerating] = useState(false);
+  const [resetTokenError, setResetTokenError] = useState('');
 
   const authHeaders = () => {
     const identity = getAuthIdentity();
@@ -789,6 +796,109 @@ const Settings: React.FC = () => {
                 </div>
               </div>
             </div>
+
+            {getAuthIdentity().roleKey === 'super_admin' && (
+              <div className="rounded-apple-sm border border-gray-200/60 bg-white/60 backdrop-blur-xl p-6 shadow-apple-sm">
+                <h3 className="text-lg font-semibold text-gray-900 flex items-center">
+                  <Key className="w-5 h-5 mr-2 text-apple-blue" />
+                  密碼輪替與重置
+                </h3>
+                <p className="text-sm text-gray-500 mt-1">啟用全員密碼輪替，並生成一次性重置連結供用戶自助重置。</p>
+
+                {rotationResult && (
+                  <div className="mt-4 text-sm text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-apple-sm px-3 py-2">
+                    {rotationResult}
+                  </div>
+                )}
+
+                <div className="mt-4">
+                  <button
+                    type="button"
+                    disabled={rotationSaving}
+                    onClick={async () => {
+                      setRotationSaving(true);
+                      setRotationResult('');
+                      try {
+                        await setPasswordRotationEpoch(Date.now());
+                        setRotationResult('已啟用全員密碼輪替：所有用戶下次登入會被要求先修改密碼。');
+                      } catch (e: any) {
+                        setRotationResult(String(e?.response?.data?.detail || e?.message || '啟用失敗'));
+                      } finally {
+                        setRotationSaving(false);
+                      }
+                    }}
+                    className="h-11 px-4 bg-apple-blue hover:bg-blue-600 text-white rounded-apple-sm font-medium transition-colors inline-flex items-center gap-2 disabled:opacity-70"
+                  >
+                    {rotationSaving && <Loader2 className="w-4 h-4 animate-spin" />}
+                    <span>啟用全員密碼輪替</span>
+                  </button>
+                </div>
+
+                <div className="mt-5 grid grid-cols-1 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">生成重置連結（username 或 Email）</label>
+                    <input
+                      value={resetTokenIdentifier}
+                      onChange={(e) => setResetTokenIdentifier(e.target.value)}
+                      placeholder="例如：admin 或 admin@example.com"
+                      className="w-full h-11 px-4 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/40 focus:border-apple-blue transition-all"
+                    />
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      disabled={resetTokenGenerating}
+                      onClick={async () => {
+                        const id = resetTokenIdentifier.trim();
+                        if (!id) return;
+                        setResetTokenGenerating(true);
+                        setResetTokenError('');
+                        setResetTokenResult(null);
+                        try {
+                          const created = await createAdminPasswordResetToken(id);
+                          setResetTokenResult({ token: created.token, expires_at: created.expires_at });
+                        } catch (e: any) {
+                          setResetTokenError(String(e?.response?.data?.detail || e?.response?.data?.error || e?.message || '生成失敗'));
+                        } finally {
+                          setResetTokenGenerating(false);
+                        }
+                      }}
+                      className="h-11 px-4 border border-gray-200 rounded-apple-sm text-sm hover:bg-gray-50 inline-flex items-center gap-2 disabled:opacity-70"
+                    >
+                      {resetTokenGenerating && <Loader2 className="w-4 h-4 animate-spin" />}
+                      <span>生成連結</span>
+                    </button>
+                    {resetTokenError && <div className="text-sm text-red-600">{resetTokenError}</div>}
+                  </div>
+
+                  {resetTokenResult && (
+                    <div className="rounded border border-gray-200 bg-white p-3">
+                      <div className="text-xs text-gray-500">到期時間：{new Date(resetTokenResult.expires_at).toLocaleString()}</div>
+                      <div className="mt-2 text-sm text-gray-900 break-all">
+                        {`${window.location.origin}/reset-password?token=${encodeURIComponent(resetTokenResult.token)}`}
+                      </div>
+                      <div className="mt-3 flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const url = `${window.location.origin}/reset-password?token=${encodeURIComponent(resetTokenResult.token)}`;
+                            try {
+                              await navigator.clipboard.writeText(url);
+                              alert('已複製重置連結');
+                            } catch {
+                              alert('複製失敗，請手動複製');
+                            }
+                          }}
+                          className="h-9 px-3 border border-gray-200 rounded text-sm hover:bg-gray-50"
+                        >
+                          複製連結
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             <div className="rounded-apple-sm border border-gray-200/60 bg-white/60 backdrop-blur-xl p-6 shadow-apple-sm">
               <div className="flex items-start justify-between gap-4">

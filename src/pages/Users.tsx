@@ -1,6 +1,7 @@
 import React, { useEffect, useImperativeHandle, useState } from 'react';
 import { Plus, Search, Edit2, Shield, Loader2, RefreshCw, Trash2 } from 'lucide-react';
 import { User, getUsers, createUser, updateUser, getUserPermissions, updateUserPermissions, deleteUser, checkUserUnique, changeMyPassword } from '../api/users';
+import { recordPasswordChanged } from '../api/passwordPolicy';
 import Modal from '../components/Modal';
 import clsx from 'clsx';
 import { useAuthStore } from '../store/authStore';
@@ -350,6 +351,7 @@ const Users = React.forwardRef<UsersHandle, UsersProps>(({ embedded, showCreateB
         newPassword,
         forceReset: isSuperAdmin && !editingOwn,
       });
+      await recordPasswordChanged(passwordTargetUser.username);
       setPasswordModalOpen(false);
       alert('密碼修改成功');
     } catch (err: any) {

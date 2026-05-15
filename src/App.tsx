@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'r
 // EST Labor System Imports
 import Layout from './components/Layout';
 import Login from './pages/Login';
+import ResetPassword from './pages/ResetPassword';
 import Dashboard from './pages/Dashboard';
 import Users from './pages/Users';
 import Employers from './pages/Employers';
@@ -14,6 +15,7 @@ import Settings from './pages/Settings';
 import DeletionApprovals from './pages/DeletionApprovals';
 import Placeholder from './pages/Placeholder';
 import FinanceManagement from './pages/FinanceManagement';
+import ChangePassword from './pages/ChangePassword';
 import { useAuthStore } from './store/authStore';
 import { canAccessPath } from './utils/authRole';
 
@@ -32,6 +34,7 @@ function App() {
     <Router>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
         
         <Route path="/" element={
           <PrivateRoute>
@@ -40,6 +43,7 @@ function App() {
         }>
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard" element={<Dashboard />} />
+          <Route path="change-password" element={<ChangePassword />} />
           <Route path="users" element={<Users />} />
           <Route path="employers" element={<Employers />} />
           <Route path="quota-applications" element={<QuotaApplications />} />

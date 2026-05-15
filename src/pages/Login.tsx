@@ -5,6 +5,7 @@ import apiClient from '../api/client';
 import { useAuthStore } from '../store/authStore';
 import { findUsernameByEmail, getExtendedProfileByUsername } from '../utils/userDirectoryProfile';
 import { appendGlobalAuditLog } from '../utils/auditLog';
+import { getMyPasswordPolicy, requestPasswordReset } from '../api/passwordPolicy';
 import googleIcon from '../assets/auth/google.svg';
 import facebookIcon from '../assets/auth/facebook.svg';
 import appleIcon from '../assets/auth/apple.svg';
@@ -29,6 +30,10 @@ const Login: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [socialLoading, setSocialLoading] = useState<'google' | 'facebook' | 'apple' | null>(null);
   const [socialError, setSocialError] = useState('');
+  const [resetModalOpen, setResetModalOpen] = useState(false);
+  const [resetIdentifier, setResetIdentifier] = useState('');
+  const [resetSending, setResetSending] = useState(false);
+  const [resetSent, setResetSent] = useState(false);
   const formRef = useRef<HTMLFormElement | null>(null);
   const navigate = useNavigate();
   const setAuth = useAuthStore((state) => state.setAuth);
@@ -120,7 +125,16 @@ const Login: React.FC = () => {
             record_no: String(meResponse?.data?.username || ''),
             details: '使用者成功登入系統',
           });
-          navigate('/dashboard');
+          try {
+            const policy = await getMyPasswordPolicy();
+            if (policy?.must_change_password) {
+              navigate('/change-password?reason=rotation');
+            } else {
+              navigate('/dashboard');
+            }
+          } catch {
+            navigate('/dashboard');
+          }
           return true;
         }
         return false;
@@ -343,7 +357,13 @@ const Login: React.FC = () => {
                   <button
                     type="button"
                     className="text-xs text-apple-blue hover:text-blue-700 transition-colors"
-                    onClick={() => setError('忘記密碼流程尚未接入，請聯絡系統管理員。')}
+                    onClick={() => {
+                      setError('');
+                      setSocialError('');
+                      setResetIdentifier(username.trim());
+                      setResetSent(false);
+                      setResetModalOpen(true);
+                    }}
                   >
                     忘記密碼？
                   </button>
@@ -375,6 +395,70 @@ const Login: React.FC = () => {
           </section>
         </div>
       </div>
+
+      {resetModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={() => {
+              if (resetSending) return;
+              setResetModalOpen(false);
+            }}
+          />
+          <div className="relative w-full max-w-md rounded-apple-sm bg-white p-5 shadow-apple-sm border border-gray-200">
+            <div className="text-base font-semibold text-gray-900">忘記密碼</div>
+            <div className="mt-1 text-sm text-gray-500">
+              如已配置發送渠道，系統會發送重置連結；否則請聯絡系統管理員索取重置連結。
+            </div>
+
+            {resetSent && (
+              <div className="mt-3 text-sm text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-apple-sm px-3 py-2">
+                已提交重置申請。如賬號存在且系統已配置發送渠道，將收到重置指引。
+              </div>
+            )}
+
+            <div className="mt-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">帳號（使用者名稱或 Email）</label>
+              <input
+                value={resetIdentifier}
+                onChange={(e) => setResetIdentifier(e.target.value)}
+                className="w-full h-11 px-4 bg-white border border-gray-200 rounded-apple-sm focus:outline-none focus:ring-2 focus:ring-apple-blue/40 focus:border-apple-blue transition-all"
+                placeholder="例如：admin 或 admin@example.com"
+              />
+            </div>
+
+            <div className="mt-4 flex items-center gap-3">
+              <button
+                type="button"
+                disabled={resetSending}
+                onClick={async () => {
+                  const id = resetIdentifier.trim();
+                  if (!id) return;
+                  setResetSending(true);
+                  try {
+                    await requestPasswordReset(id);
+                    setResetSent(true);
+                  } finally {
+                    setResetSending(false);
+                  }
+                }}
+                className="flex-1 h-11 rounded-apple-sm bg-apple-blue text-white hover:bg-blue-600 transition-colors disabled:opacity-60 inline-flex items-center justify-center gap-2"
+              >
+                {resetSending && <Loader2 className="w-4 h-4 animate-spin" />}
+                <span>提交申請</span>
+              </button>
+              <button
+                type="button"
+                disabled={resetSending}
+                onClick={() => setResetModalOpen(false)}
+                className="h-11 px-4 rounded-apple-sm border border-gray-200 bg-white hover:bg-gray-50 transition-colors text-sm disabled:opacity-60"
+              >
+                關閉
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
