@@ -1,5 +1,3 @@
-import { getBackendHost, upstreamFetch } from '../_upstream';
-
 const json = (res: any, status: number, body: any) => {
   res.statusCode = status;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -16,6 +14,24 @@ const safeJsonParse = (text: string) => {
     return text ? JSON.parse(text) : null;
   } catch {
     return null;
+  }
+};
+
+const getBackendOrigin = () => {
+  const raw = String(process.env.BACKEND_ORIGIN || 'https://119.91.50.192').trim();
+  return raw.endsWith('/') ? raw.slice(0, -1) : raw;
+};
+
+const getBackendHost = () => String(process.env.BACKEND_HOST || '').trim();
+
+const ensureTlsForOrigin = (origin: string) => {
+  try {
+    const u = new URL(origin);
+    const host = String(u.hostname || '');
+    const isIpV4 = /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
+    if (u.protocol === 'https:' && isIpV4) process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+  } catch {
+    return;
   }
 };
 
@@ -38,8 +54,10 @@ const loginWithUsername = async (username: string, password: string) => {
   const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json' };
   const backendHost = getBackendHost();
   if (backendHost) headers.Host = backendHost;
+  const origin = getBackendOrigin();
+  ensureTlsForOrigin(origin);
 
-  const resp = await upstreamFetch('/api/auth/login', {
+  const resp = await fetch(`${origin}/api/auth/login`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ username, password }),
@@ -56,8 +74,10 @@ const resolveUsernameByEmail = async (email: string, token: string) => {
   };
   const backendHost = getBackendHost();
   if (backendHost) headers.Host = backendHost;
+  const origin = getBackendOrigin();
+  ensureTlsForOrigin(origin);
 
-  const resp = await upstreamFetch(`/api/users?limit=${DEFAULT_LIMIT}`, {
+  const resp = await fetch(`${origin}/api/users?limit=${DEFAULT_LIMIT}`, {
     method: 'GET',
     headers,
   });
