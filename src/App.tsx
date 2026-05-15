@@ -29,11 +29,17 @@ const PrivateRoute = ({ children }: { children: React.ReactNode }) => {
   return <>{children}</>;
 };
 
+const LoginRoute = () => {
+  const token = useAuthStore((state) => state.token);
+  if (token) return <Navigate to="/dashboard" replace />;
+  return <Login />;
+};
+
 function App() {
   return (
     <Router>
       <Routes>
-        <Route path="/login" element={<Login />} />
+        <Route path="/login" element={<LoginRoute />} />
         <Route path="/reset-password" element={<ResetPassword />} />
         
         <Route path="/" element={
