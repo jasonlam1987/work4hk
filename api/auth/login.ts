@@ -107,7 +107,11 @@ export default async function handler(req: any, res: any) {
 
     return json(res, 401, { code: 'AUTH_INVALID', error: '帳號或密碼錯誤' });
   } catch (e: any) {
-    return json(res, 502, { code: 'AUTH_UPSTREAM_UNAVAILABLE', error: '登入服務暫時不可用，請稍後再試' });
+    return json(res, 502, {
+      code: 'AUTH_UPSTREAM_UNAVAILABLE',
+      error: '登入服務暫時不可用，請稍後再試',
+      detail: String(e?.message || e),
+    });
   }
 }
 
