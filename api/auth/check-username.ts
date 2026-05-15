@@ -8,6 +8,12 @@ const BACKEND_ORIGIN = String(process.env.BACKEND_ORIGIN || 'https://119.91.50.1
 const BACKEND_HOST = String(process.env.BACKEND_HOST || '').trim()
 const DEFAULT_LIMIT = 2000
 
+try {
+  const u = new URL(BACKEND_ORIGIN)
+  const isIpV4 = /^\d{1,3}(\.\d{1,3}){3}$/.test(String(u.hostname || ''))
+  if (u.protocol === 'https:' && isIpV4) process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
+} catch {}
+
 const readBody = async (req: any) => {
   if (req.body && typeof req.body === 'object') return req.body;
   const chunks: Buffer[] = [];

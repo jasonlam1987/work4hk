@@ -1,9 +1,22 @@
-const getBackendOrigin = () => {
+export const getBackendOrigin = () => {
   const raw = String(process.env.BACKEND_ORIGIN || 'https://119.91.50.192').trim();
   return raw.endsWith('/') ? raw.slice(0, -1) : raw;
 };
 
-const getBackendHost = () => String(process.env.BACKEND_HOST || '').trim();
+export const getBackendHost = () => String(process.env.BACKEND_HOST || '').trim();
+
+const ensureTlsForOrigin = (origin: string) => {
+  try {
+    const u = new URL(origin);
+    const host = String(u.hostname || '');
+    const isIpV4 = /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
+    if (u.protocol === 'https:' && isIpV4) {
+      process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+    }
+  } catch {
+    return;
+  }
+};
 
 const hopByHopHeaders = new Set([
   'connection',
@@ -44,6 +57,7 @@ export const buildUpstreamHeaders = (req: any) => {
 
 export const upstreamFetch = async (pathWithQuery: string, init: RequestInit) => {
   const origin = getBackendOrigin();
+  ensureTlsForOrigin(origin);
   const path = String(pathWithQuery || '/').startsWith('/') ? String(pathWithQuery || '/') : `/${pathWithQuery}`;
   return fetch(`${origin}${path}`, init);
 };

@@ -1,3 +1,5 @@
+import { getBackendHost, upstreamFetch } from '../_upstream';
+
 const json = (res: any, status: number, body: any) => {
   res.statusCode = status;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -16,13 +18,6 @@ const safeJsonParse = (text: string) => {
     return null;
   }
 };
-
-const getBackendOrigin = () => {
-  const raw = String(process.env.BACKEND_ORIGIN || 'https://119.91.50.192').trim();
-  return raw.endsWith('/') ? raw.slice(0, -1) : raw;
-};
-
-const getBackendHost = () => String(process.env.BACKEND_HOST || '').trim();
 
 const readBody = async (req: any) => {
   if (req.body && typeof req.body === 'object') return req.body;
@@ -44,7 +39,7 @@ const loginWithUsername = async (username: string, password: string) => {
   const backendHost = getBackendHost();
   if (backendHost) headers.Host = backendHost;
 
-  const resp = await fetch(`${getBackendOrigin()}/api/auth/login`, {
+  const resp = await upstreamFetch('/api/auth/login', {
     method: 'POST',
     headers,
     body: JSON.stringify({ username, password }),
@@ -55,8 +50,6 @@ const loginWithUsername = async (username: string, password: string) => {
 };
 
 const resolveUsernameByEmail = async (email: string, token: string) => {
-  const url = new URL(`${getBackendOrigin()}/api/users`);
-  url.searchParams.set('limit', String(DEFAULT_LIMIT));
   const headers: Record<string, string> = {
     Authorization: token.toLowerCase().startsWith('bearer ') ? token : `Bearer ${token}`,
     Accept: 'application/json',
@@ -64,7 +57,7 @@ const resolveUsernameByEmail = async (email: string, token: string) => {
   const backendHost = getBackendHost();
   if (backendHost) headers.Host = backendHost;
 
-  const resp = await fetch(url.toString(), {
+  const resp = await upstreamFetch(`/api/users?limit=${DEFAULT_LIMIT}`, {
     method: 'GET',
     headers,
   });
