@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 
 // EST Labor System Imports
@@ -14,24 +15,64 @@ import Settings from './pages/Settings';
 import DeletionApprovals from './pages/DeletionApprovals';
 import Placeholder from './pages/Placeholder';
 import FinanceManagement from './pages/FinanceManagement';
+import Register from './pages/Register';
+import RegisterVerify from './pages/RegisterVerify';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
 import { useAuthStore } from './store/authStore';
 import { canAccessPath } from './utils/authRole';
+import { getDevBypassSeed, isDevBypassEnabled } from './utils/devBypass';
+
+const useDevBypassAuth = () => {
+  const token = useAuthStore((state) => state.token);
+  const user = useAuthStore((state) => state.user);
+  const setAuth = useAuthStore((state) => state.setAuth);
+  const enabled = isDevBypassEnabled();
+
+  useEffect(() => {
+    if (!enabled || token) return;
+    const seed = getDevBypassSeed();
+    setAuth(seed.user, seed.token);
+  }, [enabled, token, setAuth]);
+
+  if (enabled && !token) {
+    const seed = getDevBypassSeed();
+    return { token: seed.token, roleKey: seed.user.role_key, initializing: true };
+  }
+
+  return {
+    token,
+    roleKey: user?.role_key || '',
+    initializing: false,
+  };
+};
 
 // Private Route for EST
 const PrivateRoute = ({ children }: { children: React.ReactNode }) => {
   const location = useLocation();
-  const token = useAuthStore((state) => state.token);
-  const roleKey = useAuthStore((state) => state.user?.role_key || '');
+  const { token, roleKey, initializing } = useDevBypassAuth();
+  if (initializing) return null;
   if (!token) return <Navigate to="/login" />;
   if (!canAccessPath(location.pathname, roleKey)) return <Navigate to="/dashboard" replace />;
   return <>{children}</>;
+};
+
+const LoginRoute = () => {
+  const { token, initializing } = useDevBypassAuth();
+  if (initializing) return null;
+  if (token) return <Navigate to="/dashboard" replace />;
+  return <Login />;
 };
 
 function App() {
   return (
     <Router>
       <Routes>
-        <Route path="/login" element={<Login />} />
+        <Route path="/login" element={<LoginRoute />} />
+        <Route path="/register" element={<Register />} />
+        <Route path="/register/verify" element={<RegisterVerify />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
         
         <Route path="/" element={
           <PrivateRoute>

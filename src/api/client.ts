@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { useAuthStore } from '../store/authStore';
+import { isDevBypassSession } from '../utils/devBypass';
 
 const apiClient = axios.create({
   baseURL: '/api',
@@ -30,6 +31,7 @@ apiClient.interceptors.response.use(
   (error) => {
     const status = error?.response?.status as number | undefined;
     if (status === 401) {
+      if (isDevBypassSession()) return Promise.reject(error);
       const url = String(error?.config?.url || '');
       const isAuthRequest =
         url.includes('/auth/login') ||

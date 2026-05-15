@@ -1,5 +1,6 @@
 import { Worker } from '../api/workers';
 import { labourStatusToUi } from './workersForm';
+import { isDevBypassSession } from './devBypass';
 
 export const FINANCE_RECORDS_KEY = 'finance_records_v1';
 
@@ -61,10 +62,31 @@ export const readFinanceRecords = (): FinanceRecord[] => {
     const raw = localStorage.getItem(FINANCE_RECORDS_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
     if (!Array.isArray(parsed)) return [];
-    return parsed
+    const items = parsed
       .filter((x) => x && typeof x === 'object')
       .map((x) => normalizeRecord(x as FinanceRecord))
       .sort((a, b) => Date.parse(b.updated_at || '') - Date.parse(a.updated_at || ''));
+    if (items.length > 0 || !isDevBypassSession()) return items;
+    const seeded = [
+      normalizeRecord({
+        worker_id: 1,
+        worker_name: '張三',
+        labour_status: '在職',
+        on_duty_date: '2026-01-15',
+        labour_company_id: 'labour-company-dev-1',
+        labour_company_name: '測試勞務公司 A',
+        cost_visa_fee: 1200,
+        cost_labour_fee: 3500,
+        cost_insurance_fee: 500,
+        cost_third_party_service_fee: 300,
+        income_labour_fee: 5200,
+        income_agency_fee: 1800,
+        actual_profit: 0,
+        updated_at: new Date('2026-01-15T10:00:00.000Z').toISOString(),
+      }),
+    ];
+    writeFinanceRecords(seeded);
+    return seeded;
   } catch {
     return [];
   }

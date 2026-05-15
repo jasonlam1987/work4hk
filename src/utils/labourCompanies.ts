@@ -1,3 +1,5 @@
+import { isDevBypassSession } from './devBypass';
+
 export const LABOUR_COMPANIES_KEY = 'labour_companies_v1';
 
 export type LabourCompany = {
@@ -43,10 +45,35 @@ export const readLabourCompanies = (): LabourCompany[] => {
     const raw = localStorage.getItem(LABOUR_COMPANIES_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
     if (!Array.isArray(parsed)) return [];
-    return parsed
+    const items = parsed
       .filter((x) => x && typeof x === 'object')
       .map((x) => normalizeItem(x as LabourCompany))
       .sort((a, b) => Date.parse(b.updated_at || b.created_at || '') - Date.parse(a.updated_at || a.created_at || ''));
+    if (items.length > 0 || !isDevBypassSession()) return items;
+    const seeded = [
+      normalizeItem({
+        id: 'labour-company-dev-1',
+        company_name: '測試勞務公司 A',
+        company_code: 'LC-A',
+        contact_person: '陳經理',
+        labour_fee_per_person_month: 3500,
+        insurance_fee_per_person_month: 500,
+        created_at: new Date('2026-01-01T09:00:00.000Z').toISOString(),
+        updated_at: new Date('2026-01-01T09:00:00.000Z').toISOString(),
+      }),
+      normalizeItem({
+        id: 'labour-company-dev-2',
+        company_name: '測試勞務公司 B',
+        company_code: 'LC-B',
+        contact_person: '林主管',
+        labour_fee_per_person_month: 4200,
+        insurance_fee_per_person_month: 650,
+        created_at: new Date('2026-01-02T09:00:00.000Z').toISOString(),
+        updated_at: new Date('2026-01-02T09:00:00.000Z').toISOString(),
+      }),
+    ];
+    writeLabourCompanies(seeded);
+    return seeded;
   } catch {
     return [];
   }

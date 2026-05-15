@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { LogIn, Loader2, Mail, Lock, CircleAlert } from 'lucide-react';
 import apiClient from '../api/client';
 import { useAuthStore } from '../store/authStore';
@@ -56,6 +56,8 @@ const Login: React.FC = () => {
             : '';
     const lower = msg.toLowerCase();
     if (code === 'AUTH_INVALID') return '帳號或密碼錯誤';
+    if (code === 'UPSTREAM_UNAVAILABLE') return '登入服務暫時不可用，請稍後再試';
+    if (code === 'UPSTREAM_LOGIN_FAILED') return '登入服務回應異常，請稍後再試';
     if (!msg) return '驗證失敗，請檢查帳號密碼';
     if (lower.includes('not found') || lower.includes('no such user') || lower.includes('user not found')) {
       return '沒有該賬號，請先註冊';
@@ -217,14 +219,12 @@ const Login: React.FC = () => {
             <div className="w-full max-w-[440px]">
               <div className="flex items-center justify-between mb-2">
                 <p className="text-sm text-gray-500">歡迎使用 Work4HK</p>
-                <button
-                  type="button"
-                  disabled
-                  aria-disabled
-                  className="px-3 py-1.5 text-xs rounded-full bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-200"
+                <Link
+                  to="/register"
+                  className="px-3 py-1.5 text-xs rounded-full bg-blue-50 text-apple-blue border border-blue-100 hover:bg-blue-100 transition-colors"
                 >
-                  註冊（即將開放）
-                </button>
+                  郵箱註冊
+                </Link>
               </div>
               <h2 className="text-4xl font-semibold text-gray-900 tracking-tight">Work4HK 港工</h2>
               <p className="text-sm text-gray-500 mt-2">請使用第三方方式或輸入帳號密碼繼續。</p>
@@ -340,13 +340,12 @@ const Login: React.FC = () => {
                 </div>
 
                 <div className="flex justify-end">
-                  <button
-                    type="button"
+                  <Link
+                    to="/forgot-password"
                     className="text-xs text-apple-blue hover:text-blue-700 transition-colors"
-                    onClick={() => setError('忘記密碼流程尚未接入，請聯絡系統管理員。')}
                   >
                     忘記密碼？
-                  </button>
+                  </Link>
                 </div>
 
                 <button

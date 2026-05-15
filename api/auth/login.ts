@@ -4,7 +4,7 @@ const json = (res: any, status: number, body: any) => {
   res.end(JSON.stringify(body));
 };
 
-const BACKEND_ORIGIN = 'http://119.91.50.192';
+const BACKEND_ORIGIN = String(process.env.AUTH_BACKEND_ORIGIN || 'http://119.91.50.192').trim();
 const DEFAULT_LIMIT = 2000;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -73,6 +73,20 @@ export default async function handler(req: any, res: any) {
   try {
     const direct = await loginWithUsername(identifier, password);
     if (direct.ok && direct.data?.access_token) return json(res, 200, direct.data);
+    if (direct.status >= 500) {
+      return json(res, 502, {
+        code: 'UPSTREAM_UNAVAILABLE',
+        error: '登入服務暫時不可用',
+        detail: `upstream_status=${direct.status}`,
+      });
+    }
+    if (direct.status && direct.status !== 401) {
+      return json(res, 502, {
+        code: 'UPSTREAM_LOGIN_FAILED',
+        error: '登入服務回應異常',
+        detail: `upstream_status=${direct.status}`,
+      });
+    }
 
     const maybeEmail = EMAIL_RE.test(identifier);
     const precheckToken =
@@ -85,12 +99,19 @@ export default async function handler(req: any, res: any) {
       if (resolvedUsername) {
         const retry = await loginWithUsername(resolvedUsername, password);
         if (retry.ok && retry.data?.access_token) return json(res, 200, retry.data);
+        if (retry.status >= 500) {
+          return json(res, 502, {
+            code: 'UPSTREAM_UNAVAILABLE',
+            error: '登入服務暫時不可用',
+            detail: `upstream_status=${retry.status}`,
+          });
+        }
       }
     }
 
     return json(res, 401, { code: 'AUTH_INVALID', error: '帳號或密碼錯誤' });
   } catch {
-    return json(res, 401, { code: 'AUTH_INVALID', error: '帳號或密碼錯誤' });
+    return json(res, 502, { code: 'UPSTREAM_UNAVAILABLE', error: '登入服務暫時不可用' });
   }
 }
 

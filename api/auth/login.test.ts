@@ -89,5 +89,22 @@ describe('auth login API', () => {
     expect(body.code).toBe('AUTH_INVALID');
     expect(body.error).toBe('帳號或密碼錯誤');
   });
+
+  it('returns 502 when upstream is unavailable', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status: 500,
+        text: async () => JSON.stringify({ error: 'upstream error' }),
+      })) as any
+    );
+    const req = makeReq({ username: 'admin', password: 'Passw0rd!' });
+    const res = makeRes();
+    await loginHandler(req, res);
+    const body = JSON.parse(String(res.state.body || '{}'));
+    expect(res.statusCode).toBe(502);
+    expect(body.code).toBe('UPSTREAM_UNAVAILABLE');
+  });
 });
 

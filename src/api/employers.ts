@@ -1,7 +1,9 @@
 import apiClient from './client';
 import { appendGlobalAuditLog } from '../utils/auditLog';
+import { isDevBypassSession } from '../utils/devBypass';
 
 const EMPLOYER_EXT_MAP_KEY = 'employer_ext_v1';
+const DEV_EMPLOYERS_KEY = 'dev_mock_employers_v1';
 const PHONE_CODES = new Set(['+86', '+852', '+853']);
 
 type EmployerExt = {
@@ -107,12 +109,101 @@ export interface Employer {
 
 export type EmployerCreate = Omit<Employer, 'id' | 'created_at' | 'updated_at'>;
 
+const nowIso = () => new Date().toISOString();
+
+const seedDevEmployers = (): Employer[] => {
+  const seeded: Employer[] = [
+    {
+      id: 1,
+      name: '香港測試僱主有限公司',
+      english_name: 'HK Demo Employer Limited',
+      code: 'EST00001',
+      short_name: '測試僱主A',
+      company_address: '香港九龍測試道 1 號',
+      mailing_address: '香港九龍測試道 1 號',
+      business_registration_number: 'BR123456',
+      company_incorporation_number: 'CI123456',
+      contact_person: '李主管',
+      phone_code: '+852',
+      contact_phone: '61234567',
+      business_type: '餐飲',
+      remarks: '本機免登入測試資料',
+      created_at: new Date('2026-01-01T09:00:00.000Z').toISOString(),
+      updated_at: new Date('2026-01-01T09:00:00.000Z').toISOString(),
+    },
+    {
+      id: 2,
+      name: '澳門示範僱主有限公司',
+      english_name: 'Macau Sample Employer Limited',
+      code: 'EST00002',
+      short_name: '測試僱主B',
+      company_address: '澳門示範街 8 號',
+      mailing_address: '澳門示範街 8 號',
+      business_registration_number: 'BR223344',
+      company_incorporation_number: 'CI223344',
+      contact_person: '陳經理',
+      phone_code: '+853',
+      contact_phone: '66123456',
+      business_type: '清潔',
+      remarks: '本機免登入測試資料',
+      created_at: new Date('2026-01-02T09:00:00.000Z').toISOString(),
+      updated_at: new Date('2026-01-02T09:00:00.000Z').toISOString(),
+    },
+  ];
+  localStorage.setItem(DEV_EMPLOYERS_KEY, JSON.stringify(seeded));
+  seeded.forEach((row) => persistExtFields(row));
+  return seeded;
+};
+
+const readDevEmployers = (): Employer[] => {
+  try {
+    const raw = localStorage.getItem(DEV_EMPLOYERS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    const items = Array.isArray(parsed) ? (parsed as Employer[]) : [];
+    if (items.length > 0) return applyExtFields(items);
+  } catch {
+  }
+  return seedDevEmployers();
+};
+
+const writeDevEmployers = (items: Employer[]) => {
+  localStorage.setItem(DEV_EMPLOYERS_KEY, JSON.stringify(items));
+};
+
 export const getEmployers = async (params?: { q?: string; limit?: number; offset?: number }) => {
+  if (isDevBypassSession()) {
+    const keyword = String(params?.q || '').trim().toLowerCase();
+    const offset = Math.max(0, Number(params?.offset || 0));
+    const limit = Number(params?.limit || 0);
+    let items = readDevEmployers();
+    if (keyword) {
+      items = items.filter((item) =>
+        `${item.code || ''} ${item.name || ''} ${item.english_name || ''} ${item.business_registration_number || ''} ${item.company_incorporation_number || ''}`
+          .toLowerCase()
+          .includes(keyword)
+      );
+    }
+    return limit > 0 ? items.slice(offset, offset + limit) : items.slice(offset);
+  }
   const response = await apiClient.get<Employer[]>('/employers', { params });
   return applyExtFields(response.data || []);
 };
 
 export const createEmployer = async (data: EmployerCreate) => {
+  if (isDevBypassSession()) {
+    const items = readDevEmployers();
+    const next: Employer = {
+      id: items.reduce((max, item) => Math.max(max, Number(item.id || 0)), 0) + 1,
+      ...data,
+      name: String(data.name || '').trim(),
+      phone_code: normalizePhoneCode(data.phone_code),
+      created_at: nowIso(),
+      updated_at: nowIso(),
+    };
+    persistExtFields(next);
+    writeDevEmployers([next, ...items]);
+    return applyExtFields([next])[0];
+  }
   try {
     const response = await apiClient.post<Employer>('/employers', data);
     persistExtFields({
@@ -175,6 +266,25 @@ export const createEmployer = async (data: EmployerCreate) => {
 };
 
 export const updateEmployer = async (id: number, data: Partial<EmployerCreate>) => {
+  if (isDevBypassSession()) {
+    const items = readDevEmployers();
+    const next = items.map((item) =>
+      Number(item.id) === Number(id)
+        ? {
+            ...item,
+            ...data,
+            name: String((data.name ?? item.name) || '').trim(),
+            phone_code: normalizePhoneCode(String((data.phone_code ?? item.phone_code) || '')),
+            updated_at: nowIso(),
+          }
+        : item
+    );
+    const updated = next.find((item) => Number(item.id) === Number(id));
+    if (!updated) throw new Error('EMPLOYER_NOT_FOUND');
+    persistExtFields(updated);
+    writeDevEmployers(next);
+    return applyExtFields([updated])[0];
+  }
   try {
     const response = await apiClient.patch<Employer>(`/employers/${id}`, data);
     persistExtFields({
@@ -237,6 +347,12 @@ export const updateEmployer = async (id: number, data: Partial<EmployerCreate>) 
 };
 
 export const deleteEmployer = async (id: number, employerName?: string) => {
+  if (isDevBypassSession()) {
+    const items = readDevEmployers().filter((item) => Number(item.id) !== Number(id));
+    writeDevEmployers(items);
+    removeExtFields({ id, name: employerName });
+    return { ok: true };
+  }
   const response = await apiClient.delete(`/employers/${id}`);
   const serverName = String((response as any)?.data?.name || '').trim();
   removeExtFields({ id, name: employerName || serverName });

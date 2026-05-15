@@ -24,6 +24,7 @@
     "date-fns": "^4.1.0",
     "jszip": "^3.10.1",
     "lucide-react": "^0.511.0",
+    "nodemailer": "^8.0.7",
     "openai": "^6.33.0",
     "pinyin-pro": "^3.28.1",
     "react": "^18.3.1",
